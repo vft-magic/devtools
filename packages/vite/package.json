@@ -1,0 +1,68 @@
+{
+  "name": "@tmagic/vite-plugin-devtools",
+  "type": "module",
+  "version": "0.0.1",
+  "description": "A vite plugin for TMagic DevTools",
+  "author": "jia000",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/vite.d.ts",
+      "import": "./dist/vite.mjs",
+      "require": "./dist/vite.cjs"
+    },
+    "./*": "./*"
+  },
+  "main": "dist/vite.cjs",
+  "module": "dist/vite.mjs",
+  "types": "dist/vite.d.ts",
+  "files": [
+    "*.d.ts",
+    "./src/overlay.js",
+    "./src/overlay/**",
+    "client",
+    "dist",
+    "overlay"
+  ],
+  "homepage": "https://github.com/vft-magic/devtools#readme",
+  "repository": {
+    "directory": "packages/vite",
+    "type": "git",
+    "url": "git+https://github.com/vft-magic/devtools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vft-magic/devtools/issues"
+  },
+  "keywords": [
+    "tmagic-devtools",
+    "vite-plugin",
+    "@tmagic/vite-plugin-devtools"
+  ],
+  "engines": {
+    "node": ">=18.20.0"
+  },
+  "scripts": {
+    "build": "unbuild",
+    "stub": "tsup --watch"
+  },
+  "peerDependencies": {
+    "vite": "^3.1.0 || ^4.0.0-0 || ^5.0.0-0"
+  },
+  "dependencies": {
+    "@tmagic/devtools-core": "workspace:^",
+    "@tmagic/devtools-kit": "workspace:^",
+    "@vue/devtools-shared": "^7.3.8",
+    "execa": "^8.0.1",
+    "kolorist": "^1.8.0",
+    "sirv": "^2.0.4",
+    "vite-plugin-inspect": "^0.8.5"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "fast-glob": "^3.3.2",
+    "image-meta": "^0.2.1",
+    "pathe": "^1.1.2",
+    "tsup": "^8.2.4",
+    "unbuild": "^2.0.0"
+  }
+}

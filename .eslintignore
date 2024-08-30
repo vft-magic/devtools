@@ -1,0 +1,10 @@
+dist
+coverage
+node_modules
+
+packages/vite/client/*
+packages/vite/src/overlay.js
+packages/vite/src/overlay/*
+packages/client/public/*
+
+playground/public/*

@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "es2018",
+    "jsx": "preserve",
+    "lib": ["esnext", "dom"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@vue/devtools-core": ["./packages/core/src/index.ts"],
+      "@vue/devtools-kit": ["./packages/devtools-kit/src/index.ts"]
+    },
+    "resolveJsonModule": true,
+    "types": [
+      "chrome",
+      "vite/client",
+      "vitest/globals"
+    ],
+    "allowJs": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "noImplicitAny": false,
+    // We use tsup/vite instead of tsc to build the package, so we don't need to care about this option.
+    // Add outDir option to avoid tsconfig error in monorepo.
+    "outDir": "dist",
+    "esModuleInterop": true
+  },
+  "exclude": [
+    "**/vite/src/overlay/**",
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/**/*.js"
+  ]
+}

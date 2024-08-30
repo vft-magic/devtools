@@ -1,0 +1,57 @@
+{
+  "name": "@tmagic/devtools-core",
+  "type": "module",
+  "version": "0.0.1",
+  "author": "jia000",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "files": [
+    "dist",
+    "server.d.ts"
+  ],
+  "homepage": "https://github.com/vft-magic/devtools#readme",
+  "repository": {
+    "directory": "packages/core",
+    "type": "git",
+    "url": "git+https://github.com/vft-magic/devtools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vft-magic/devtools/issues"
+  },
+  "keywords": [
+    "tmagic-devtools",
+    "@tmagic/devtools-core"
+  ],
+  "engines": {
+    "node": ">=18.20.0"
+  },
+  "scripts": {
+    "build": "tsup --clean",
+    "prepare:type": "tsup --dts-only",
+    "stub": "tsup --watch --onSuccess 'tsup --dts-only'"
+  },
+  "dependencies": {
+    "@tmagic/devtools-kit": "workspace:^",
+    "@vue/devtools-shared": "^7.3.8",
+    "hookable": "^5.5.3"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "vue": "^3.4.38"
+  },
+  "peerDependencies": {
+    "typescript": "*"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  }
+}
