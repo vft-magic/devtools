@@ -6,6 +6,7 @@ import { isInSeparateWindow } from '@vue/devtools-shared';
 import { functions, TMagicDevToolsVuePlugin } from '@tmagic/devtools-core';
 import { createRpcClient } from '@tmagic/devtools-kit';
 
+import Settings from './pages/settings.vue';
 import App from './App.vue';
 
 import '@unocss/reset/tailwind.css';
@@ -22,6 +23,7 @@ const routes = [
   { path: '/', component: Index },
   { path: '/overview', component: Overview },
   { path: '/pages', component: Pages },
+  { path: '/settings', component: Settings },
 ];
 
 const router = createRouter({

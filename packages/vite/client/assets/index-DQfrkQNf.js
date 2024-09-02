@@ -126,6 +126,10 @@ const looseToNumber = (val) => {
   const n = parseFloat(val);
   return isNaN(n) ? val : n;
 };
+const toNumber = (val) => {
+  const n = isString$1(val) ? Number(val) : NaN;
+  return isNaN(n) ? val : n;
+};
 let _globalThis;
 const getGlobalThis = () => {
   return _globalThis || (_globalThis = typeof globalThis !== "undefined" ? globalThis : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : typeof global !== "undefined" ? global : {});
@@ -727,7 +731,7 @@ function get(target, key, isReadonly2 = false, isShallow2 = false) {
     track(rawTarget, "get", rawKey);
   }
   const { has: has2 } = getProto(rawTarget);
-  const wrap = isShallow2 ? toShallow : isReadonly2 ? toReadonly : toReactive;
+  const wrap = isShallow2 ? toShallow : isReadonly2 ? toReadonly : toReactive$1;
   if (has2.call(rawTarget, key)) {
     return wrap(target.get(key));
   } else if (has2.call(rawTarget, rawKey)) {
@@ -815,7 +819,7 @@ function createForEach(isReadonly2, isShallow2) {
     const observed = this;
     const target = observed["__v_raw"];
     const rawTarget = toRaw$1(target);
-    const wrap = isShallow2 ? toShallow : isReadonly2 ? toReadonly : toReactive;
+    const wrap = isShallow2 ? toShallow : isReadonly2 ? toReadonly : toReactive$1;
     !isReadonly2 && track(rawTarget, "iterate", ITERATE_KEY);
     return target.forEach((value, key) => {
       return callback.call(thisArg, wrap(value), wrap(key), observed);
@@ -830,7 +834,7 @@ function createIterableMethod(method, isReadonly2, isShallow2) {
     const isPair = method === "entries" || method === Symbol.iterator && targetIsMap;
     const isKeyOnly = method === "keys" && targetIsMap;
     const innerIterator = target[method](...args);
-    const wrap = isShallow2 ? toShallow : isReadonly2 ? toReadonly : toReactive;
+    const wrap = isShallow2 ? toShallow : isReadonly2 ? toReadonly : toReactive$1;
     !isReadonly2 && track(
       rawTarget,
       "iterate",
@@ -1087,7 +1091,7 @@ function markRaw(value) {
   }
   return value;
 }
-const toReactive = (value) => isObject$3(value) ? reactive(value) : value;
+const toReactive$1 = (value) => isObject$3(value) ? reactive(value) : value;
 const toReadonly = (value) => isObject$3(value) ? readonly(value) : value;
 class ComputedRefImpl {
   constructor(getter, _setter, isReadonly2, isSSR) {
@@ -1186,7 +1190,7 @@ class RefImpl {
     this.dep = void 0;
     this.__v_isRef = true;
     this._rawValue = __v_isShallow ? value : toRaw$1(value);
-    this._value = __v_isShallow ? value : toReactive(value);
+    this._value = __v_isShallow ? value : toReactive$1(value);
   }
   get value() {
     trackRefValue(this);
@@ -1198,7 +1202,7 @@ class RefImpl {
     if (hasChanged(newVal, this._rawValue)) {
       this._rawValue;
       this._rawValue = newVal;
-      this._value = useDirectValue ? newVal : toReactive(newVal);
+      this._value = useDirectValue ? newVal : toReactive$1(newVal);
       triggerRefValue(this, 4);
     }
   }
@@ -1244,6 +1248,13 @@ class CustomRefImpl {
 }
 function customRef(factory) {
   return new CustomRefImpl(factory);
+}
+function toRefs(object) {
+  const ret = isArray$2(object) ? new Array(object.length) : {};
+  for (const key in object) {
+    ret[key] = propertyToRef(object, key);
+  }
+  return ret;
 }
 class ObjectRefImpl {
   constructor(_object, _key, _defaultValue) {
@@ -1690,6 +1701,299 @@ function invokeDirectiveHook(vnode, prevVNode, instance, name) {
     }
   }
 }
+const leaveCbKey = Symbol("_leaveCb");
+const enterCbKey = Symbol("_enterCb");
+function useTransitionState() {
+  const state = {
+    isMounted: false,
+    isLeaving: false,
+    isUnmounting: false,
+    leavingVNodes: /* @__PURE__ */ new Map()
+  };
+  onMounted(() => {
+    state.isMounted = true;
+  });
+  onBeforeUnmount(() => {
+    state.isUnmounting = true;
+  });
+  return state;
+}
+const TransitionHookValidator = [Function, Array];
+const BaseTransitionPropsValidators = {
+  mode: String,
+  appear: Boolean,
+  persisted: Boolean,
+  // enter
+  onBeforeEnter: TransitionHookValidator,
+  onEnter: TransitionHookValidator,
+  onAfterEnter: TransitionHookValidator,
+  onEnterCancelled: TransitionHookValidator,
+  // leave
+  onBeforeLeave: TransitionHookValidator,
+  onLeave: TransitionHookValidator,
+  onAfterLeave: TransitionHookValidator,
+  onLeaveCancelled: TransitionHookValidator,
+  // appear
+  onBeforeAppear: TransitionHookValidator,
+  onAppear: TransitionHookValidator,
+  onAfterAppear: TransitionHookValidator,
+  onAppearCancelled: TransitionHookValidator
+};
+const recursiveGetSubtree = (instance) => {
+  const subTree = instance.subTree;
+  return subTree.component ? recursiveGetSubtree(subTree.component) : subTree;
+};
+const BaseTransitionImpl = {
+  name: `BaseTransition`,
+  props: BaseTransitionPropsValidators,
+  setup(props, { slots }) {
+    const instance = getCurrentInstance();
+    const state = useTransitionState();
+    return () => {
+      const children = slots.default && getTransitionRawChildren(slots.default(), true);
+      if (!children || !children.length) {
+        return;
+      }
+      let child = children[0];
+      if (children.length > 1) {
+        for (const c of children) {
+          if (c.type !== Comment) {
+            child = c;
+            break;
+          }
+        }
+      }
+      const rawProps = toRaw$1(props);
+      const { mode } = rawProps;
+      if (state.isLeaving) {
+        return emptyPlaceholder(child);
+      }
+      const innerChild = getKeepAliveChild(child);
+      if (!innerChild) {
+        return emptyPlaceholder(child);
+      }
+      let enterHooks = resolveTransitionHooks(
+        innerChild,
+        rawProps,
+        state,
+        instance,
+        // #11061, ensure enterHooks is fresh after clone
+        (hooks) => enterHooks = hooks
+      );
+      setTransitionHooks(innerChild, enterHooks);
+      const oldChild = instance.subTree;
+      const oldInnerChild = oldChild && getKeepAliveChild(oldChild);
+      if (oldInnerChild && oldInnerChild.type !== Comment && !isSameVNodeType(innerChild, oldInnerChild) && recursiveGetSubtree(instance).type !== Comment) {
+        const leavingHooks = resolveTransitionHooks(
+          oldInnerChild,
+          rawProps,
+          state,
+          instance
+        );
+        setTransitionHooks(oldInnerChild, leavingHooks);
+        if (mode === "out-in" && innerChild.type !== Comment) {
+          state.isLeaving = true;
+          leavingHooks.afterLeave = () => {
+            state.isLeaving = false;
+            if (instance.update.active !== false) {
+              instance.effect.dirty = true;
+              instance.update();
+            }
+          };
+          return emptyPlaceholder(child);
+        } else if (mode === "in-out" && innerChild.type !== Comment) {
+          leavingHooks.delayLeave = (el, earlyRemove, delayedLeave) => {
+            const leavingVNodesCache = getLeavingNodesForType(
+              state,
+              oldInnerChild
+            );
+            leavingVNodesCache[String(oldInnerChild.key)] = oldInnerChild;
+            el[leaveCbKey] = () => {
+              earlyRemove();
+              el[leaveCbKey] = void 0;
+              delete enterHooks.delayedLeave;
+            };
+            enterHooks.delayedLeave = delayedLeave;
+          };
+        }
+      }
+      return child;
+    };
+  }
+};
+const BaseTransition = BaseTransitionImpl;
+function getLeavingNodesForType(state, vnode) {
+  const { leavingVNodes } = state;
+  let leavingVNodesCache = leavingVNodes.get(vnode.type);
+  if (!leavingVNodesCache) {
+    leavingVNodesCache = /* @__PURE__ */ Object.create(null);
+    leavingVNodes.set(vnode.type, leavingVNodesCache);
+  }
+  return leavingVNodesCache;
+}
+function resolveTransitionHooks(vnode, props, state, instance, postClone) {
+  const {
+    appear,
+    mode,
+    persisted = false,
+    onBeforeEnter,
+    onEnter,
+    onAfterEnter,
+    onEnterCancelled,
+    onBeforeLeave,
+    onLeave,
+    onAfterLeave,
+    onLeaveCancelled,
+    onBeforeAppear,
+    onAppear,
+    onAfterAppear,
+    onAppearCancelled
+  } = props;
+  const key = String(vnode.key);
+  const leavingVNodesCache = getLeavingNodesForType(state, vnode);
+  const callHook2 = (hook, args) => {
+    hook && callWithAsyncErrorHandling(
+      hook,
+      instance,
+      9,
+      args
+    );
+  };
+  const callAsyncHook = (hook, args) => {
+    const done = args[1];
+    callHook2(hook, args);
+    if (isArray$2(hook)) {
+      if (hook.every((hook2) => hook2.length <= 1)) done();
+    } else if (hook.length <= 1) {
+      done();
+    }
+  };
+  const hooks = {
+    mode,
+    persisted,
+    beforeEnter(el) {
+      let hook = onBeforeEnter;
+      if (!state.isMounted) {
+        if (appear) {
+          hook = onBeforeAppear || onBeforeEnter;
+        } else {
+          return;
+        }
+      }
+      if (el[leaveCbKey]) {
+        el[leaveCbKey](
+          true
+          /* cancelled */
+        );
+      }
+      const leavingVNode = leavingVNodesCache[key];
+      if (leavingVNode && isSameVNodeType(vnode, leavingVNode) && leavingVNode.el[leaveCbKey]) {
+        leavingVNode.el[leaveCbKey]();
+      }
+      callHook2(hook, [el]);
+    },
+    enter(el) {
+      let hook = onEnter;
+      let afterHook = onAfterEnter;
+      let cancelHook = onEnterCancelled;
+      if (!state.isMounted) {
+        if (appear) {
+          hook = onAppear || onEnter;
+          afterHook = onAfterAppear || onAfterEnter;
+          cancelHook = onAppearCancelled || onEnterCancelled;
+        } else {
+          return;
+        }
+      }
+      let called = false;
+      const done = el[enterCbKey] = (cancelled) => {
+        if (called) return;
+        called = true;
+        if (cancelled) {
+          callHook2(cancelHook, [el]);
+        } else {
+          callHook2(afterHook, [el]);
+        }
+        if (hooks.delayedLeave) {
+          hooks.delayedLeave();
+        }
+        el[enterCbKey] = void 0;
+      };
+      if (hook) {
+        callAsyncHook(hook, [el, done]);
+      } else {
+        done();
+      }
+    },
+    leave(el, remove2) {
+      const key2 = String(vnode.key);
+      if (el[enterCbKey]) {
+        el[enterCbKey](
+          true
+          /* cancelled */
+        );
+      }
+      if (state.isUnmounting) {
+        return remove2();
+      }
+      callHook2(onBeforeLeave, [el]);
+      let called = false;
+      const done = el[leaveCbKey] = (cancelled) => {
+        if (called) return;
+        called = true;
+        remove2();
+        if (cancelled) {
+          callHook2(onLeaveCancelled, [el]);
+        } else {
+          callHook2(onAfterLeave, [el]);
+        }
+        el[leaveCbKey] = void 0;
+        if (leavingVNodesCache[key2] === vnode) {
+          delete leavingVNodesCache[key2];
+        }
+      };
+      leavingVNodesCache[key2] = vnode;
+      if (onLeave) {
+        callAsyncHook(onLeave, [el, done]);
+      } else {
+        done();
+      }
+    },
+    clone(vnode2) {
+      const hooks2 = resolveTransitionHooks(
+        vnode2,
+        props,
+        state,
+        instance,
+        postClone
+      );
+      if (postClone) postClone(hooks2);
+      return hooks2;
+    }
+  };
+  return hooks;
+}
+function emptyPlaceholder(vnode) {
+  if (isKeepAlive(vnode)) {
+    vnode = cloneVNode(vnode);
+    vnode.children = null;
+    return vnode;
+  }
+}
+function getKeepAliveChild(vnode) {
+  if (!isKeepAlive(vnode)) {
+    return vnode;
+  }
+  const { shapeFlag, children } = vnode;
+  if (children) {
+    if (shapeFlag & 16) {
+      return children[0];
+    }
+    if (shapeFlag & 32 && isFunction(children.default)) {
+      return children.default();
+    }
+  }
+}
 function setTransitionHooks(vnode, hooks) {
   if (vnode.shapeFlag & 6 && vnode.component) {
     setTransitionHooks(vnode.component.subTree, hooks);
@@ -1699,6 +2003,28 @@ function setTransitionHooks(vnode, hooks) {
   } else {
     vnode.transition = hooks;
   }
+}
+function getTransitionRawChildren(children, keepComment = false, parentKey) {
+  let ret = [];
+  let keyedFragmentCount = 0;
+  for (let i = 0; i < children.length; i++) {
+    let child = children[i];
+    const key = parentKey == null ? child.key : String(parentKey) + String(child.key != null ? child.key : i);
+    if (child.type === Fragment) {
+      if (child.patchFlag & 128) keyedFragmentCount++;
+      ret = ret.concat(
+        getTransitionRawChildren(child.children, keepComment, key)
+      );
+    } else if (keepComment || child.type !== Comment) {
+      ret.push(key != null ? cloneVNode(child, { key }) : child);
+    }
+  }
+  if (keyedFragmentCount > 1) {
+    for (let i = 0; i < ret.length; i++) {
+      ret[i].patchFlag = -2;
+    }
+  }
+  return ret;
 }
 /*! #__NO_SIDE_EFFECTS__ */
 // @__NO_SIDE_EFFECTS__
@@ -2199,7 +2525,7 @@ function applyOptions(instance) {
   const ctx = instance.ctx;
   shouldCacheAccess = false;
   if (options.beforeCreate) {
-    callHook(options.beforeCreate, instance, "bc");
+    callHook$1(options.beforeCreate, instance, "bc");
   }
   const {
     // state
@@ -2284,7 +2610,7 @@ function applyOptions(instance) {
     });
   }
   if (created) {
-    callHook(created, instance, "c");
+    callHook$1(created, instance, "c");
   }
   function registerLifecycleHook(register, hook) {
     if (isArray$2(hook)) {
@@ -2359,7 +2685,7 @@ function resolveInjections(injectOptions, ctx, checkDuplicateProperties = NOOP) 
     }
   }
 }
-function callHook(hook, instance, type) {
+function callHook$1(hook, instance, type) {
   callWithAsyncErrorHandling(
     isArray$2(hook) ? hook.map((h2) => h2.bind(instance.proxy)) : hook.bind(instance.proxy),
     instance,
@@ -3108,6 +3434,281 @@ function setRef(rawRef, oldRawRef, parentSuspense, vnode, isUnmount = false) {
 }
 const TeleportEndKey = Symbol("_vte");
 const isTeleport = (type) => type.__isTeleport;
+const isTeleportDisabled = (props) => props && (props.disabled || props.disabled === "");
+const isTargetSVG = (target) => typeof SVGElement !== "undefined" && target instanceof SVGElement;
+const isTargetMathML = (target) => typeof MathMLElement === "function" && target instanceof MathMLElement;
+const resolveTarget = (props, select) => {
+  const targetSelector = props && props.to;
+  if (isString$1(targetSelector)) {
+    if (!select) {
+      return null;
+    } else {
+      const target = select(targetSelector);
+      return target;
+    }
+  } else {
+    return targetSelector;
+  }
+};
+const TeleportImpl = {
+  name: "Teleport",
+  __isTeleport: true,
+  process(n1, n2, container, anchor, parentComponent, parentSuspense, namespace, slotScopeIds, optimized, internals) {
+    const {
+      mc: mountChildren,
+      pc: patchChildren,
+      pbc: patchBlockChildren,
+      o: { insert, querySelector, createText, createComment }
+    } = internals;
+    const disabled = isTeleportDisabled(n2.props);
+    let { shapeFlag, children, dynamicChildren } = n2;
+    if (n1 == null) {
+      const placeholder = n2.el = createText("");
+      const mainAnchor = n2.anchor = createText("");
+      insert(placeholder, container, anchor);
+      insert(mainAnchor, container, anchor);
+      const target = n2.target = resolveTarget(n2.props, querySelector);
+      const targetAnchor = prepareAnchor(target, n2, createText, insert);
+      if (target) {
+        if (namespace === "svg" || isTargetSVG(target)) {
+          namespace = "svg";
+        } else if (namespace === "mathml" || isTargetMathML(target)) {
+          namespace = "mathml";
+        }
+      }
+      const mount = (container2, anchor2) => {
+        if (shapeFlag & 16) {
+          mountChildren(
+            children,
+            container2,
+            anchor2,
+            parentComponent,
+            parentSuspense,
+            namespace,
+            slotScopeIds,
+            optimized
+          );
+        }
+      };
+      if (disabled) {
+        mount(container, mainAnchor);
+      } else if (target) {
+        mount(target, targetAnchor);
+      }
+    } else {
+      n2.el = n1.el;
+      n2.targetStart = n1.targetStart;
+      const mainAnchor = n2.anchor = n1.anchor;
+      const target = n2.target = n1.target;
+      const targetAnchor = n2.targetAnchor = n1.targetAnchor;
+      const wasDisabled = isTeleportDisabled(n1.props);
+      const currentContainer = wasDisabled ? container : target;
+      const currentAnchor = wasDisabled ? mainAnchor : targetAnchor;
+      if (namespace === "svg" || isTargetSVG(target)) {
+        namespace = "svg";
+      } else if (namespace === "mathml" || isTargetMathML(target)) {
+        namespace = "mathml";
+      }
+      if (dynamicChildren) {
+        patchBlockChildren(
+          n1.dynamicChildren,
+          dynamicChildren,
+          currentContainer,
+          parentComponent,
+          parentSuspense,
+          namespace,
+          slotScopeIds
+        );
+        traverseStaticChildren(n1, n2, true);
+      } else if (!optimized) {
+        patchChildren(
+          n1,
+          n2,
+          currentContainer,
+          currentAnchor,
+          parentComponent,
+          parentSuspense,
+          namespace,
+          slotScopeIds,
+          false
+        );
+      }
+      if (disabled) {
+        if (!wasDisabled) {
+          moveTeleport(
+            n2,
+            container,
+            mainAnchor,
+            internals,
+            1
+          );
+        } else {
+          if (n2.props && n1.props && n2.props.to !== n1.props.to) {
+            n2.props.to = n1.props.to;
+          }
+        }
+      } else {
+        if ((n2.props && n2.props.to) !== (n1.props && n1.props.to)) {
+          const nextTarget = n2.target = resolveTarget(
+            n2.props,
+            querySelector
+          );
+          if (nextTarget) {
+            moveTeleport(
+              n2,
+              nextTarget,
+              null,
+              internals,
+              0
+            );
+          }
+        } else if (wasDisabled) {
+          moveTeleport(
+            n2,
+            target,
+            targetAnchor,
+            internals,
+            1
+          );
+        }
+      }
+    }
+    updateCssVars(n2);
+  },
+  remove(vnode, parentComponent, parentSuspense, { um: unmount, o: { remove: hostRemove } }, doRemove) {
+    const {
+      shapeFlag,
+      children,
+      anchor,
+      targetStart,
+      targetAnchor,
+      target,
+      props
+    } = vnode;
+    if (target) {
+      hostRemove(targetStart);
+      hostRemove(targetAnchor);
+    }
+    doRemove && hostRemove(anchor);
+    if (shapeFlag & 16) {
+      const shouldRemove = doRemove || !isTeleportDisabled(props);
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        unmount(
+          child,
+          parentComponent,
+          parentSuspense,
+          shouldRemove,
+          !!child.dynamicChildren
+        );
+      }
+    }
+  },
+  move: moveTeleport,
+  hydrate: hydrateTeleport
+};
+function moveTeleport(vnode, container, parentAnchor, { o: { insert }, m: move }, moveType = 2) {
+  if (moveType === 0) {
+    insert(vnode.targetAnchor, container, parentAnchor);
+  }
+  const { el, anchor, shapeFlag, children, props } = vnode;
+  const isReorder = moveType === 2;
+  if (isReorder) {
+    insert(el, container, parentAnchor);
+  }
+  if (!isReorder || isTeleportDisabled(props)) {
+    if (shapeFlag & 16) {
+      for (let i = 0; i < children.length; i++) {
+        move(
+          children[i],
+          container,
+          parentAnchor,
+          2
+        );
+      }
+    }
+  }
+  if (isReorder) {
+    insert(anchor, container, parentAnchor);
+  }
+}
+function hydrateTeleport(node, vnode, parentComponent, parentSuspense, slotScopeIds, optimized, {
+  o: { nextSibling, parentNode, querySelector, insert, createText }
+}, hydrateChildren) {
+  const target = vnode.target = resolveTarget(
+    vnode.props,
+    querySelector
+  );
+  if (target) {
+    const targetNode = target._lpa || target.firstChild;
+    if (vnode.shapeFlag & 16) {
+      if (isTeleportDisabled(vnode.props)) {
+        vnode.anchor = hydrateChildren(
+          nextSibling(node),
+          vnode,
+          parentNode(node),
+          parentComponent,
+          parentSuspense,
+          slotScopeIds,
+          optimized
+        );
+        vnode.targetStart = targetNode;
+        vnode.targetAnchor = targetNode && nextSibling(targetNode);
+      } else {
+        vnode.anchor = nextSibling(node);
+        let targetAnchor = targetNode;
+        while (targetAnchor) {
+          if (targetAnchor && targetAnchor.nodeType === 8) {
+            if (targetAnchor.data === "teleport start anchor") {
+              vnode.targetStart = targetAnchor;
+            } else if (targetAnchor.data === "teleport anchor") {
+              vnode.targetAnchor = targetAnchor;
+              target._lpa = vnode.targetAnchor && nextSibling(vnode.targetAnchor);
+              break;
+            }
+          }
+          targetAnchor = nextSibling(targetAnchor);
+        }
+        if (!vnode.targetAnchor) {
+          prepareAnchor(target, vnode, createText, insert);
+        }
+        hydrateChildren(
+          targetNode && nextSibling(targetNode),
+          vnode,
+          target,
+          parentComponent,
+          parentSuspense,
+          slotScopeIds,
+          optimized
+        );
+      }
+    }
+    updateCssVars(vnode);
+  }
+  return vnode.anchor && nextSibling(vnode.anchor);
+}
+const Teleport = TeleportImpl;
+function updateCssVars(vnode) {
+  const ctx = vnode.ctx;
+  if (ctx && ctx.ut) {
+    let node = vnode.children[0].el;
+    while (node && node !== vnode.targetAnchor) {
+      if (node.nodeType === 1) node.setAttribute("data-v-owner", ctx.uid);
+      node = node.nextSibling;
+    }
+    ctx.ut();
+  }
+}
+function prepareAnchor(target, vnode, createText, insert) {
+  const targetStart = vnode.targetStart = createText("");
+  const targetAnchor = vnode.targetAnchor = createText("");
+  targetStart[TeleportEndKey] = targetAnchor;
+  if (target) {
+    insert(targetStart, target);
+    insert(targetAnchor, target);
+  }
+  return targetAnchor;
+}
 const queuePostRenderEffect = queueEffectWithSuspense;
 function createRenderer(options) {
   return baseCreateRenderer(options);
@@ -5695,7 +6296,270 @@ const nodeOps = {
     ];
   }
 };
+const TRANSITION = "transition";
+const ANIMATION = "animation";
 const vtcKey = Symbol("_vtc");
+const Transition = (props, { slots }) => h$2(BaseTransition, resolveTransitionProps(props), slots);
+Transition.displayName = "Transition";
+const DOMTransitionPropsValidators = {
+  name: String,
+  type: String,
+  css: {
+    type: Boolean,
+    default: true
+  },
+  duration: [String, Number, Object],
+  enterFromClass: String,
+  enterActiveClass: String,
+  enterToClass: String,
+  appearFromClass: String,
+  appearActiveClass: String,
+  appearToClass: String,
+  leaveFromClass: String,
+  leaveActiveClass: String,
+  leaveToClass: String
+};
+Transition.props = /* @__PURE__ */ extend(
+  {},
+  BaseTransitionPropsValidators,
+  DOMTransitionPropsValidators
+);
+const callHook = (hook, args = []) => {
+  if (isArray$2(hook)) {
+    hook.forEach((h2) => h2(...args));
+  } else if (hook) {
+    hook(...args);
+  }
+};
+const hasExplicitCallback = (hook) => {
+  return hook ? isArray$2(hook) ? hook.some((h2) => h2.length > 1) : hook.length > 1 : false;
+};
+function resolveTransitionProps(rawProps) {
+  const baseProps = {};
+  for (const key in rawProps) {
+    if (!(key in DOMTransitionPropsValidators)) {
+      baseProps[key] = rawProps[key];
+    }
+  }
+  if (rawProps.css === false) {
+    return baseProps;
+  }
+  const {
+    name = "v",
+    type,
+    duration,
+    enterFromClass = `${name}-enter-from`,
+    enterActiveClass = `${name}-enter-active`,
+    enterToClass = `${name}-enter-to`,
+    appearFromClass = enterFromClass,
+    appearActiveClass = enterActiveClass,
+    appearToClass = enterToClass,
+    leaveFromClass = `${name}-leave-from`,
+    leaveActiveClass = `${name}-leave-active`,
+    leaveToClass = `${name}-leave-to`
+  } = rawProps;
+  const durations = normalizeDuration(duration);
+  const enterDuration = durations && durations[0];
+  const leaveDuration = durations && durations[1];
+  const {
+    onBeforeEnter,
+    onEnter,
+    onEnterCancelled,
+    onLeave,
+    onLeaveCancelled,
+    onBeforeAppear = onBeforeEnter,
+    onAppear = onEnter,
+    onAppearCancelled = onEnterCancelled
+  } = baseProps;
+  const finishEnter = (el, isAppear, done) => {
+    removeTransitionClass(el, isAppear ? appearToClass : enterToClass);
+    removeTransitionClass(el, isAppear ? appearActiveClass : enterActiveClass);
+    done && done();
+  };
+  const finishLeave = (el, done) => {
+    el._isLeaving = false;
+    removeTransitionClass(el, leaveFromClass);
+    removeTransitionClass(el, leaveToClass);
+    removeTransitionClass(el, leaveActiveClass);
+    done && done();
+  };
+  const makeEnterHook = (isAppear) => {
+    return (el, done) => {
+      const hook = isAppear ? onAppear : onEnter;
+      const resolve = () => finishEnter(el, isAppear, done);
+      callHook(hook, [el, resolve]);
+      nextFrame(() => {
+        removeTransitionClass(el, isAppear ? appearFromClass : enterFromClass);
+        addTransitionClass(el, isAppear ? appearToClass : enterToClass);
+        if (!hasExplicitCallback(hook)) {
+          whenTransitionEnds(el, type, enterDuration, resolve);
+        }
+      });
+    };
+  };
+  return extend(baseProps, {
+    onBeforeEnter(el) {
+      callHook(onBeforeEnter, [el]);
+      addTransitionClass(el, enterFromClass);
+      addTransitionClass(el, enterActiveClass);
+    },
+    onBeforeAppear(el) {
+      callHook(onBeforeAppear, [el]);
+      addTransitionClass(el, appearFromClass);
+      addTransitionClass(el, appearActiveClass);
+    },
+    onEnter: makeEnterHook(false),
+    onAppear: makeEnterHook(true),
+    onLeave(el, done) {
+      el._isLeaving = true;
+      const resolve = () => finishLeave(el, done);
+      addTransitionClass(el, leaveFromClass);
+      addTransitionClass(el, leaveActiveClass);
+      forceReflow();
+      nextFrame(() => {
+        if (!el._isLeaving) {
+          return;
+        }
+        removeTransitionClass(el, leaveFromClass);
+        addTransitionClass(el, leaveToClass);
+        if (!hasExplicitCallback(onLeave)) {
+          whenTransitionEnds(el, type, leaveDuration, resolve);
+        }
+      });
+      callHook(onLeave, [el, resolve]);
+    },
+    onEnterCancelled(el) {
+      finishEnter(el, false);
+      callHook(onEnterCancelled, [el]);
+    },
+    onAppearCancelled(el) {
+      finishEnter(el, true);
+      callHook(onAppearCancelled, [el]);
+    },
+    onLeaveCancelled(el) {
+      finishLeave(el);
+      callHook(onLeaveCancelled, [el]);
+    }
+  });
+}
+function normalizeDuration(duration) {
+  if (duration == null) {
+    return null;
+  } else if (isObject$3(duration)) {
+    return [NumberOf(duration.enter), NumberOf(duration.leave)];
+  } else {
+    const n = NumberOf(duration);
+    return [n, n];
+  }
+}
+function NumberOf(val) {
+  const res = toNumber(val);
+  return res;
+}
+function addTransitionClass(el, cls) {
+  cls.split(/\s+/).forEach((c) => c && el.classList.add(c));
+  (el[vtcKey] || (el[vtcKey] = /* @__PURE__ */ new Set())).add(cls);
+}
+function removeTransitionClass(el, cls) {
+  cls.split(/\s+/).forEach((c) => c && el.classList.remove(c));
+  const _vtc = el[vtcKey];
+  if (_vtc) {
+    _vtc.delete(cls);
+    if (!_vtc.size) {
+      el[vtcKey] = void 0;
+    }
+  }
+}
+function nextFrame(cb) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(cb);
+  });
+}
+let endId = 0;
+function whenTransitionEnds(el, expectedType, explicitTimeout, resolve) {
+  const id = el._endId = ++endId;
+  const resolveIfNotStale = () => {
+    if (id === el._endId) {
+      resolve();
+    }
+  };
+  if (explicitTimeout) {
+    return setTimeout(resolveIfNotStale, explicitTimeout);
+  }
+  const { type, timeout, propCount } = getTransitionInfo(el, expectedType);
+  if (!type) {
+    return resolve();
+  }
+  const endEvent = type + "end";
+  let ended = 0;
+  const end = () => {
+    el.removeEventListener(endEvent, onEnd);
+    resolveIfNotStale();
+  };
+  const onEnd = (e) => {
+    if (e.target === el && ++ended >= propCount) {
+      end();
+    }
+  };
+  setTimeout(() => {
+    if (ended < propCount) {
+      end();
+    }
+  }, timeout + 1);
+  el.addEventListener(endEvent, onEnd);
+}
+function getTransitionInfo(el, expectedType) {
+  const styles = window.getComputedStyle(el);
+  const getStyleProperties = (key) => (styles[key] || "").split(", ");
+  const transitionDelays = getStyleProperties(`${TRANSITION}Delay`);
+  const transitionDurations = getStyleProperties(`${TRANSITION}Duration`);
+  const transitionTimeout = getTimeout(transitionDelays, transitionDurations);
+  const animationDelays = getStyleProperties(`${ANIMATION}Delay`);
+  const animationDurations = getStyleProperties(`${ANIMATION}Duration`);
+  const animationTimeout = getTimeout(animationDelays, animationDurations);
+  let type = null;
+  let timeout = 0;
+  let propCount = 0;
+  if (expectedType === TRANSITION) {
+    if (transitionTimeout > 0) {
+      type = TRANSITION;
+      timeout = transitionTimeout;
+      propCount = transitionDurations.length;
+    }
+  } else if (expectedType === ANIMATION) {
+    if (animationTimeout > 0) {
+      type = ANIMATION;
+      timeout = animationTimeout;
+      propCount = animationDurations.length;
+    }
+  } else {
+    timeout = Math.max(transitionTimeout, animationTimeout);
+    type = timeout > 0 ? transitionTimeout > animationTimeout ? TRANSITION : ANIMATION : null;
+    propCount = type ? type === TRANSITION ? transitionDurations.length : animationDurations.length : 0;
+  }
+  const hasTransform = type === TRANSITION && /\b(transform|all)(,|$)/.test(
+    getStyleProperties(`${TRANSITION}Property`).toString()
+  );
+  return {
+    type,
+    timeout,
+    propCount,
+    hasTransform
+  };
+}
+function getTimeout(delays, durations) {
+  while (delays.length < durations.length) {
+    delays = delays.concat(delays);
+  }
+  return Math.max(...durations.map((d, i) => toMs(d) + toMs(delays[i])));
+}
+function toMs(s) {
+  if (s === "auto") return 0;
+  return Number(s.slice(0, -1).replace(",", ".")) * 1e3;
+}
+function forceReflow() {
+  return document.body.offsetHeight;
+}
 function patchClass(el, value, isSVG) {
   const transitionClasses = el[vtcKey];
   if (transitionClasses) {
@@ -5995,6 +6859,31 @@ function shouldSetAsProp(el, key, value, isSVG) {
   }
   return key in el;
 }
+const systemModifiers = ["ctrl", "shift", "alt", "meta"];
+const modifierGuards = {
+  stop: (e) => e.stopPropagation(),
+  prevent: (e) => e.preventDefault(),
+  self: (e) => e.target !== e.currentTarget,
+  ctrl: (e) => !e.ctrlKey,
+  shift: (e) => !e.shiftKey,
+  alt: (e) => !e.altKey,
+  meta: (e) => !e.metaKey,
+  left: (e) => "button" in e && e.button !== 0,
+  middle: (e) => "button" in e && e.button !== 1,
+  right: (e) => "button" in e && e.button !== 2,
+  exact: (e, modifiers) => systemModifiers.some((m) => e[`${m}Key`] && !modifiers.includes(m))
+};
+const withModifiers = (fn, modifiers) => {
+  const cache = fn._withMods || (fn._withMods = {});
+  const cacheKey = modifiers.join(".");
+  return cache[cacheKey] || (cache[cacheKey] = (event, ...args) => {
+    for (let i = 0; i < modifiers.length; i++) {
+      const guard = modifierGuards[modifiers[i]];
+      if (guard && guard(event, modifiers)) return;
+    }
+    return fn(event, ...args);
+  });
+};
 const keyNames = {
   esc: "escape",
   space: " ",
@@ -11970,7 +12859,7 @@ Object.entries(tokenMap).reduce((acc, [key, value]) => {
 }, {});
 function getPropType(type) {
   if (Array.isArray(type)) return type.map((t) => getPropType(t)).join(" or ");
-  if (type == null) return "null";
+  if (type === null) return "null";
   const match = type.toString().match(fnTypeRE);
   return typeof type === "function" ? (match == null ? void 0 : match[1]) || "any" : "any";
 }
@@ -13847,7 +14736,7 @@ const size = function (options) {
 
 /* Injected with object hook! */
 
-function n$1(t){var e;return (null==(e=t.ownerDocument)?void 0:e.defaultView)||window}function o(t){return n$1(t).getComputedStyle(t)}const i=Math.min,r=Math.max,l$1=Math.round;function c$1(t){const e=o(t);let n=parseFloat(e.width),i=parseFloat(e.height);const r=t.offsetWidth,c=t.offsetHeight,s=l$1(n)!==r||l$1(i)!==c;return s&&(n=r,i=c),{width:n,height:i,fallback:s}}function s(t){return h$1(t)?(t.nodeName||"").toLowerCase():""}let f;function u(){if(f)return f;const t=navigator.userAgentData;return t&&Array.isArray(t.brands)?(f=t.brands.map((t=>t.brand+"/"+t.version)).join(" "),f):navigator.userAgent}function a(t){return t instanceof n$1(t).HTMLElement}function d$1(t){return t instanceof n$1(t).Element}function h$1(t){return t instanceof n$1(t).Node}function p(t){if("undefined"==typeof ShadowRoot)return !1;return t instanceof n$1(t).ShadowRoot||t instanceof ShadowRoot}function g$2(t){const{overflow:e,overflowX:n,overflowY:i,display:r}=o(t);return /auto|scroll|overlay|hidden|clip/.test(e+i+n)&&!["inline","contents"].includes(r)}function m$1(t){return ["table","td","th"].includes(s(t))}function y$1(t){const e=/firefox/i.test(u()),n=o(t),i=n.backdropFilter||n.WebkitBackdropFilter;return "none"!==n.transform||"none"!==n.perspective||!!i&&"none"!==i||e&&"filter"===n.willChange||e&&!!n.filter&&"none"!==n.filter||["transform","perspective"].some((t=>n.willChange.includes(t)))||["paint","layout","strict","content"].some((t=>{const e=n.contain;return null!=e&&e.includes(t)}))}function x$2(){return !/^((?!chrome|android).)*safari/i.test(u())}function w(t){return ["html","body","#document"].includes(s(t))}function v(t){return d$1(t)?t:t.contextElement}const b$1={x:1,y:1};function L(t){const e=v(t);if(!a(e))return b$1;const n=e.getBoundingClientRect(),{width:o,height:i,fallback:r}=c$1(e);let s=(r?l$1(n.width):n.width)/o,f=(r?l$1(n.height):n.height)/i;return s&&Number.isFinite(s)||(s=1),f&&Number.isFinite(f)||(f=1),{x:s,y:f}}function E$1(t,e,o,i){var r,l;void 0===e&&(e=!1),void 0===o&&(o=!1);const c=t.getBoundingClientRect(),s=v(t);let f=b$1;e&&(i?d$1(i)&&(f=L(i)):f=L(t));const u=s?n$1(s):window,a=!x$2()&&o;let h=(c.left+(a&&(null==(r=u.visualViewport)?void 0:r.offsetLeft)||0))/f.x,p=(c.top+(a&&(null==(l=u.visualViewport)?void 0:l.offsetTop)||0))/f.y,g=c.width/f.x,m=c.height/f.y;if(s){const t=n$1(s),e=i&&d$1(i)?n$1(i):i;let o=t.frameElement;for(;o&&i&&e!==t;){const t=L(o),e=o.getBoundingClientRect(),i=getComputedStyle(o);e.x+=(o.clientLeft+parseFloat(i.paddingLeft))*t.x,e.y+=(o.clientTop+parseFloat(i.paddingTop))*t.y,h*=t.x,p*=t.y,g*=t.x,m*=t.y,h+=e.x,p+=e.y,o=n$1(o).frameElement;}}return {width:g,height:m,top:p,right:h+g,bottom:p+m,left:h,x:h,y:p}}function R(t){return ((h$1(t)?t.ownerDocument:t.document)||window.document).documentElement}function T(t){return d$1(t)?{scrollLeft:t.scrollLeft,scrollTop:t.scrollTop}:{scrollLeft:t.pageXOffset,scrollTop:t.pageYOffset}}function C$1(t){return E$1(R(t)).left+T(t).scrollLeft}function F(t){if("html"===s(t))return t;const e=t.assignedSlot||t.parentNode||p(t)&&t.host||R(t);return p(e)?e.host:e}function W(t){const e=F(t);return w(e)?e.ownerDocument.body:a(e)&&g$2(e)?e:W(e)}function D(t,e){var o;void 0===e&&(e=[]);const i=W(t),r=i===(null==(o=t.ownerDocument)?void 0:o.body),l=n$1(i);return r?e.concat(l,l.visualViewport||[],g$2(i)?i:[]):e.concat(i,D(i))}function S$2(e,i,l){return "viewport"===i?rectToClientRect(function(t,e){const o=n$1(t),i=R(t),r=o.visualViewport;let l=i.clientWidth,c=i.clientHeight,s=0,f=0;if(r){l=r.width,c=r.height;const t=x$2();(t||!t&&"fixed"===e)&&(s=r.offsetLeft,f=r.offsetTop);}return {width:l,height:c,x:s,y:f}}(e,l)):d$1(i)?rectToClientRect(function(t,e){const n=E$1(t,!0,"fixed"===e),o=n.top+t.clientTop,i=n.left+t.clientLeft,r=a(t)?L(t):{x:1,y:1};return {width:t.clientWidth*r.x,height:t.clientHeight*r.y,x:i*r.x,y:o*r.y}}(i,l)):rectToClientRect(function(t){const e=R(t),n=T(t),i=t.ownerDocument.body,l=r(e.scrollWidth,e.clientWidth,i.scrollWidth,i.clientWidth),c=r(e.scrollHeight,e.clientHeight,i.scrollHeight,i.clientHeight);let s=-n.scrollLeft+C$1(t);const f=-n.scrollTop;return "rtl"===o(i).direction&&(s+=r(e.clientWidth,i.clientWidth)-l),{width:l,height:c,x:s,y:f}}(R(e)))}function A(t){return a(t)&&"fixed"!==o(t).position?t.offsetParent:null}function H(t){const e=n$1(t);let i=A(t);for(;i&&m$1(i)&&"static"===o(i).position;)i=A(i);return i&&("html"===s(i)||"body"===s(i)&&"static"===o(i).position&&!y$1(i))?e:i||function(t){let e=F(t);for(;a(e)&&!w(e);){if(y$1(e))return e;e=F(e);}return null}(t)||e}function O(t,e,n){const o=a(e),i=R(e),r=E$1(t,!0,"fixed"===n,e);let l={scrollLeft:0,scrollTop:0};const c={x:0,y:0};if(o||!o&&"fixed"!==n)if(("body"!==s(e)||g$2(i))&&(l=T(e)),a(e)){const t=E$1(e,!0);c.x=t.x+e.clientLeft,c.y=t.y+e.clientTop;}else i&&(c.x=C$1(i));return {x:r.left+l.scrollLeft-c.x,y:r.top+l.scrollTop-c.y,width:r.width,height:r.height}}const P$1={getClippingRect:function(t){let{element:e,boundary:n,rootBoundary:l,strategy:c}=t;const f="clippingAncestors"===n?function(t,e){const n=e.get(t);if(n)return n;let i=D(t).filter((t=>d$1(t)&&"body"!==s(t))),r=null;const l="fixed"===o(t).position;let c=l?F(t):t;for(;d$1(c)&&!w(c);){const t=o(c),e=y$1(c);(l?e||r:e||"static"!==t.position||!r||!["absolute","fixed"].includes(r.position))?r=t:i=i.filter((t=>t!==c)),c=F(c);}return e.set(t,i),i}(e,this._c):[].concat(n),u=[...f,l],a=u[0],h=u.reduce(((t,n)=>{const o=S$2(e,n,c);return t.top=r(o.top,t.top),t.right=i(o.right,t.right),t.bottom=i(o.bottom,t.bottom),t.left=r(o.left,t.left),t}),S$2(e,a,c));return {width:h.right-h.left,height:h.bottom-h.top,x:h.left,y:h.top}},convertOffsetParentRelativeRectToViewportRelativeRect:function(t){let{rect:e,offsetParent:n,strategy:o}=t;const i=a(n),r=R(n);if(n===r)return e;let l={scrollLeft:0,scrollTop:0},c={x:1,y:1};const f={x:0,y:0};if((i||!i&&"fixed"!==o)&&(("body"!==s(n)||g$2(r))&&(l=T(n)),a(n))){const t=E$1(n);c=L(n),f.x=t.x+n.clientLeft,f.y=t.y+n.clientTop;}return {width:e.width*c.x,height:e.height*c.y,x:e.x*c.x-l.scrollLeft*c.x+f.x,y:e.y*c.y-l.scrollTop*c.y+f.y}},isElement:d$1,getDimensions:function(t){return a(t)?c$1(t):t.getBoundingClientRect()},getOffsetParent:H,getDocumentElement:R,getScale:L,async getElementRects(t){let{reference:e,floating:n,strategy:o}=t;const i=this.getOffsetParent||H,r=this.getDimensions;return {reference:O(e,await i(n),o),floating:{x:0,y:0,...await r(n)}}},getClientRects:t=>Array.from(t.getClientRects()),isRTL:t=>"rtl"===o(t).direction};const B$1=(t,n,o)=>{const i=new Map,r={platform:P$1,...o},l={...r.platform,_c:i};return computePosition(t,n,{...r,platform:l})};
+function n$1(t){var e;return (null==(e=t.ownerDocument)?void 0:e.defaultView)||window}function o(t){return n$1(t).getComputedStyle(t)}const i=Math.min,r=Math.max,l$1=Math.round;function c$1(t){const e=o(t);let n=parseFloat(e.width),i=parseFloat(e.height);const r=t.offsetWidth,c=t.offsetHeight,s=l$1(n)!==r||l$1(i)!==c;return s&&(n=r,i=c),{width:n,height:i,fallback:s}}function s(t){return h$1(t)?(t.nodeName||"").toLowerCase():""}let f;function u(){if(f)return f;const t=navigator.userAgentData;return t&&Array.isArray(t.brands)?(f=t.brands.map((t=>t.brand+"/"+t.version)).join(" "),f):navigator.userAgent}function a(t){return t instanceof n$1(t).HTMLElement}function d$1(t){return t instanceof n$1(t).Element}function h$1(t){return t instanceof n$1(t).Node}function p(t){if("undefined"==typeof ShadowRoot)return !1;return t instanceof n$1(t).ShadowRoot||t instanceof ShadowRoot}function g$2(t){const{overflow:e,overflowX:n,overflowY:i,display:r}=o(t);return /auto|scroll|overlay|hidden|clip/.test(e+i+n)&&!["inline","contents"].includes(r)}function m$1(t){return ["table","td","th"].includes(s(t))}function y$1(t){const e=/firefox/i.test(u()),n=o(t),i=n.backdropFilter||n.WebkitBackdropFilter;return "none"!==n.transform||"none"!==n.perspective||!!i&&"none"!==i||e&&"filter"===n.willChange||e&&!!n.filter&&"none"!==n.filter||["transform","perspective"].some((t=>n.willChange.includes(t)))||["paint","layout","strict","content"].some((t=>{const e=n.contain;return null!=e&&e.includes(t)}))}function x$2(){return !/^((?!chrome|android).)*safari/i.test(u())}function w(t){return ["html","body","#document"].includes(s(t))}function v(t){return d$1(t)?t:t.contextElement}const b$1={x:1,y:1};function L(t){const e=v(t);if(!a(e))return b$1;const n=e.getBoundingClientRect(),{width:o,height:i,fallback:r}=c$1(e);let s=(r?l$1(n.width):n.width)/o,f=(r?l$1(n.height):n.height)/i;return s&&Number.isFinite(s)||(s=1),f&&Number.isFinite(f)||(f=1),{x:s,y:f}}function E$1(t,e,o,i){var r,l;void 0===e&&(e=!1),void 0===o&&(o=!1);const c=t.getBoundingClientRect(),s=v(t);let f=b$1;e&&(i?d$1(i)&&(f=L(i)):f=L(t));const u=s?n$1(s):window,a=!x$2()&&o;let h=(c.left+(a&&(null==(r=u.visualViewport)?void 0:r.offsetLeft)||0))/f.x,p=(c.top+(a&&(null==(l=u.visualViewport)?void 0:l.offsetTop)||0))/f.y,g=c.width/f.x,m=c.height/f.y;if(s){const t=n$1(s),e=i&&d$1(i)?n$1(i):i;let o=t.frameElement;for(;o&&i&&e!==t;){const t=L(o),e=o.getBoundingClientRect(),i=getComputedStyle(o);e.x+=(o.clientLeft+parseFloat(i.paddingLeft))*t.x,e.y+=(o.clientTop+parseFloat(i.paddingTop))*t.y,h*=t.x,p*=t.y,g*=t.x,m*=t.y,h+=e.x,p+=e.y,o=n$1(o).frameElement;}}return {width:g,height:m,top:p,right:h+g,bottom:p+m,left:h,x:h,y:p}}function R(t){return ((h$1(t)?t.ownerDocument:t.document)||window.document).documentElement}function T(t){return d$1(t)?{scrollLeft:t.scrollLeft,scrollTop:t.scrollTop}:{scrollLeft:t.pageXOffset,scrollTop:t.pageYOffset}}function C$1(t){return E$1(R(t)).left+T(t).scrollLeft}function F(t){if("html"===s(t))return t;const e=t.assignedSlot||t.parentNode||p(t)&&t.host||R(t);return p(e)?e.host:e}function W(t){const e=F(t);return w(e)?e.ownerDocument.body:a(e)&&g$2(e)?e:W(e)}function D(t,e){var o;void 0===e&&(e=[]);const i=W(t),r=i===(null==(o=t.ownerDocument)?void 0:o.body),l=n$1(i);return r?e.concat(l,l.visualViewport||[],g$2(i)?i:[]):e.concat(i,D(i))}function S$2(e,i,l){return "viewport"===i?rectToClientRect(function(t,e){const o=n$1(t),i=R(t),r=o.visualViewport;let l=i.clientWidth,c=i.clientHeight,s=0,f=0;if(r){l=r.width,c=r.height;const t=x$2();(t||!t&&"fixed"===e)&&(s=r.offsetLeft,f=r.offsetTop);}return {width:l,height:c,x:s,y:f}}(e,l)):d$1(i)?rectToClientRect(function(t,e){const n=E$1(t,!0,"fixed"===e),o=n.top+t.clientTop,i=n.left+t.clientLeft,r=a(t)?L(t):{x:1,y:1};return {width:t.clientWidth*r.x,height:t.clientHeight*r.y,x:i*r.x,y:o*r.y}}(i,l)):rectToClientRect(function(t){const e=R(t),n=T(t),i=t.ownerDocument.body,l=r(e.scrollWidth,e.clientWidth,i.scrollWidth,i.clientWidth),c=r(e.scrollHeight,e.clientHeight,i.scrollHeight,i.clientHeight);let s=-n.scrollLeft+C$1(t);const f=-n.scrollTop;return "rtl"===o(i).direction&&(s+=r(e.clientWidth,i.clientWidth)-l),{width:l,height:c,x:s,y:f}}(R(e)))}function A(t){return a(t)&&"fixed"!==o(t).position?t.offsetParent:null}function H$1(t){const e=n$1(t);let i=A(t);for(;i&&m$1(i)&&"static"===o(i).position;)i=A(i);return i&&("html"===s(i)||"body"===s(i)&&"static"===o(i).position&&!y$1(i))?e:i||function(t){let e=F(t);for(;a(e)&&!w(e);){if(y$1(e))return e;e=F(e);}return null}(t)||e}function O(t,e,n){const o=a(e),i=R(e),r=E$1(t,!0,"fixed"===n,e);let l={scrollLeft:0,scrollTop:0};const c={x:0,y:0};if(o||!o&&"fixed"!==n)if(("body"!==s(e)||g$2(i))&&(l=T(e)),a(e)){const t=E$1(e,!0);c.x=t.x+e.clientLeft,c.y=t.y+e.clientTop;}else i&&(c.x=C$1(i));return {x:r.left+l.scrollLeft-c.x,y:r.top+l.scrollTop-c.y,width:r.width,height:r.height}}const P$1={getClippingRect:function(t){let{element:e,boundary:n,rootBoundary:l,strategy:c}=t;const f="clippingAncestors"===n?function(t,e){const n=e.get(t);if(n)return n;let i=D(t).filter((t=>d$1(t)&&"body"!==s(t))),r=null;const l="fixed"===o(t).position;let c=l?F(t):t;for(;d$1(c)&&!w(c);){const t=o(c),e=y$1(c);(l?e||r:e||"static"!==t.position||!r||!["absolute","fixed"].includes(r.position))?r=t:i=i.filter((t=>t!==c)),c=F(c);}return e.set(t,i),i}(e,this._c):[].concat(n),u=[...f,l],a=u[0],h=u.reduce(((t,n)=>{const o=S$2(e,n,c);return t.top=r(o.top,t.top),t.right=i(o.right,t.right),t.bottom=i(o.bottom,t.bottom),t.left=r(o.left,t.left),t}),S$2(e,a,c));return {width:h.right-h.left,height:h.bottom-h.top,x:h.left,y:h.top}},convertOffsetParentRelativeRectToViewportRelativeRect:function(t){let{rect:e,offsetParent:n,strategy:o}=t;const i=a(n),r=R(n);if(n===r)return e;let l={scrollLeft:0,scrollTop:0},c={x:1,y:1};const f={x:0,y:0};if((i||!i&&"fixed"!==o)&&(("body"!==s(n)||g$2(r))&&(l=T(n)),a(n))){const t=E$1(n);c=L(n),f.x=t.x+n.clientLeft,f.y=t.y+n.clientTop;}return {width:e.width*c.x,height:e.height*c.y,x:e.x*c.x-l.scrollLeft*c.x+f.x,y:e.y*c.y-l.scrollTop*c.y+f.y}},isElement:d$1,getDimensions:function(t){return a(t)?c$1(t):t.getBoundingClientRect()},getOffsetParent:H$1,getDocumentElement:R,getScale:L,async getElementRects(t){let{reference:e,floating:n,strategy:o}=t;const i=this.getOffsetParent||H$1,r=this.getDimensions;return {reference:O(e,await i(n),o),floating:{x:0,y:0,...await r(n)}}},getClientRects:t=>Array.from(t.getClientRects()),isRTL:t=>"rtl"===o(t).direction};const B$1=(t,n,o)=>{const i=new Map,r={platform:P$1,...o},l={...r.platform,_c:i};return computePosition(t,n,{...r,platform:l})};
 /* Injected with object hook! */
 
 const h = {
@@ -13936,7 +14825,7 @@ function S$1(e, t) {
   while (o);
   return i;
 }
-function Ze(e) {
+function Ze$1(e) {
   const t = [e];
   let o = h.themes[e] || {};
   do
@@ -14584,7 +15473,7 @@ if (typeof document < "u" && typeof window < "u") {
     document.addEventListener("touchstart", (t) => ue(t), e), document.addEventListener("touchend", (t) => fe(t, !0), e);
   } else
     window.addEventListener("mousedown", (e) => ue(e), !0), window.addEventListener("click", (e) => fe(e, !1), !0);
-  window.addEventListener("resize", tt);
+  window.addEventListener("resize", tt$1);
 }
 function ue(e, t) {
   for (let o = 0; o < d.length; o++) {
@@ -14624,16 +15513,16 @@ function Pe$1(e, t) {
   }
 }
 function ce(e, t, o) {
-  return o.closeAllPopover || o.closePopover && t || et(e, o) && !t;
+  return o.closeAllPopover || o.closePopover && t || et$1(e, o) && !t;
 }
-function et(e, t) {
+function et$1(e, t) {
   if (typeof e.autoHide == "function") {
     const o = e.autoHide(t);
     return e.lastAutoHide = o, o;
   }
   return e.autoHide;
 }
-function tt() {
+function tt$1() {
   for (let e = 0; e < d.length; e++)
     d[e].$_computePosition();
 }
@@ -14743,7 +15632,7 @@ E.__file = "src/components/ResizeObserver.vue";
 const Z = (e = "theme") => ({
   computed: {
     themeClass() {
-      return Ze(this[e]);
+      return Ze$1(this[e]);
     }
   }
 }), dt = defineComponent({
@@ -14774,7 +15663,7 @@ const Z = (e = "theme") => ({
       return e != null && !isNaN(e) ? `${e}px` : null;
     }
   }
-}), lt = ["id", "aria-hidden", "tabindex", "data-popper-placement"], ht = {
+}), lt = ["id", "aria-hidden", "tabindex", "data-popper-placement"], ht$1 = {
   ref: "inner",
   class: "v-popper__inner"
 }, ut = /* @__PURE__ */ createBaseVNode("div", { class: "v-popper__arrow-outer" }, null, -1), ft = /* @__PURE__ */ createBaseVNode("div", { class: "v-popper__arrow-inner" }, null, -1), ct = [
@@ -14820,7 +15709,7 @@ function mt(e, t, o, i, s, r) {
         transformOrigin: e.result.transformOrigin
       } : void 0)
     }, [
-      createBaseVNode("div", ht, [
+      createBaseVNode("div", ht$1, [
         e.mounted ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
           createBaseVNode("div", null, [
             renderSlot(e.$slots, "default")
@@ -15132,7 +16021,7 @@ const k = /* @__PURE__ */ B(gt, [["render", wt]]), Se = {
   ...k,
   name: "VTooltip",
   vPopperTheme: "tooltip"
-}, $t = defineComponent({
+}, $t$1 = defineComponent({
   name: "VTooltipDirective",
   components: {
     Popper: Q(),
@@ -15213,7 +16102,7 @@ const k = /* @__PURE__ */ B(gt, [["render", wt]]), Se = {
     }
   }
 }), vt = ["innerHTML"], yt$1 = ["textContent"];
-function _t(e, t, o, i, s, r) {
+function _t$1(e, t, o, i, s, r) {
   const p = resolveComponent("PopperContent"), a = resolveComponent("Popper");
   return openBlock(), createBlock(a, mergeProps({ ref: "popper" }, e.$attrs, {
     theme: e.theme,
@@ -15266,7 +16155,7 @@ function _t(e, t, o, i, s, r) {
     _: 1
   }, 16, ["theme", "target-nodes", "popper-node", "onApplyShow", "onApplyHide"]);
 }
-const ze = /* @__PURE__ */ B($t, [["render", _t]]), Ae = "v-popper--has-tooltip";
+const ze$1 = /* @__PURE__ */ B($t$1, [["render", _t$1]]), Ae$1 = "v-popper--has-tooltip";
 function Tt$1(e, t) {
   let o = e.placement;
   if (!o && t)
@@ -15274,7 +16163,7 @@ function Tt$1(e, t) {
       t[i] && (o = i);
   return o || (o = S$1(e.theme || "tooltip", "placement")), o;
 }
-function Ne(e, t, o) {
+function Ne$1(e, t, o) {
   let i;
   const s = typeof t;
   return s === "string" ? i = { content: t } : t && s === "object" ? i = t : i = { content: !1 }, i.placement = Tt$1(i, o), i.targetNodes = () => [e], i.referenceNode = () => e, i;
@@ -15291,7 +16180,7 @@ function St() {
       };
     },
     render() {
-      return this.directives.map((t) => h$2(ze, {
+      return this.directives.map((t) => h$2(ze$1, {
         ...t.options,
         shown: t.shown || t.options.shown,
         key: t.id
@@ -15306,12 +16195,12 @@ function St() {
 }
 function bt(e, t, o) {
   St();
-  const i = ref(Ne(e, t, o)), s = ref(!1), r = {
+  const i = ref(Ne$1(e, t, o)), s = ref(!1), r = {
     id: Pt++,
     options: i,
     shown: s
   };
-  return b.value.push(r), e.classList && e.classList.add(Ae), e.$_popper = {
+  return b.value.push(r), e.classList && e.classList.add(Ae$1), e.$_popper = {
     options: i,
     item: r,
     show() {
@@ -15322,30 +16211,71 @@ function bt(e, t, o) {
     }
   };
 }
-function He(e) {
+function He$1(e) {
   if (e.$_popper) {
     const t = b.value.indexOf(e.$_popper.item);
     t !== -1 && b.value.splice(t, 1), delete e.$_popper, delete e.$_popperOldShown, delete e.$_popperMountTarget;
   }
-  e.classList && e.classList.remove(Ae);
+  e.classList && e.classList.remove(Ae$1);
 }
 function me(e, { value: t, modifiers: o }) {
-  const i = Ne(e, t, o);
+  const i = Ne$1(e, t, o);
   if (!i.content || S$1(i.theme || "tooltip", "disabled"))
-    He(e);
+    He$1(e);
   else {
     let s;
     e.$_popper ? (s = e.$_popper, s.options.value = i) : s = bt(e, t, o), typeof t.shown < "u" && t.shown !== e.$_popperOldShown && (e.$_popperOldShown = t.shown, t.shown ? s.show() : s.hide());
   }
 }
-const oe = {
+const oe$1 = {
   beforeMount: me,
   updated: me,
   beforeUnmount(e) {
-    He(e);
+    He$1(e);
   }
 };
-const Mt = oe, kt = Se, Vt = Ce$1;
+function ge(e) {
+  e.addEventListener("mousedown", H), e.addEventListener("click", H), e.addEventListener("touchstart", Oe$1, $ ? {
+    passive: !0
+  } : !1);
+}
+function we$1(e) {
+  e.removeEventListener("mousedown", H), e.removeEventListener("click", H), e.removeEventListener("touchstart", Oe$1), e.removeEventListener("touchend", Me), e.removeEventListener("touchcancel", Be$1);
+}
+function H(e) {
+  const t = e.currentTarget;
+  e.closePopover = !t.$_vclosepopover_touch, e.closeAllPopover = t.$_closePopoverModifiers && !!t.$_closePopoverModifiers.all;
+}
+function Oe$1(e) {
+  if (e.changedTouches.length === 1) {
+    const t = e.currentTarget;
+    t.$_vclosepopover_touch = !0;
+    const o = e.changedTouches[0];
+    t.$_vclosepopover_touchPoint = o, t.addEventListener("touchend", Me), t.addEventListener("touchcancel", Be$1);
+  }
+}
+function Me(e) {
+  const t = e.currentTarget;
+  if (t.$_vclosepopover_touch = !1, e.changedTouches.length === 1) {
+    const o = e.changedTouches[0], i = t.$_vclosepopover_touchPoint;
+    e.closePopover = Math.abs(o.screenY - i.screenY) < 20 && Math.abs(o.screenX - i.screenX) < 20, e.closeAllPopover = t.$_closePopoverModifiers && !!t.$_closePopoverModifiers.all;
+  }
+}
+function Be$1(e) {
+  const t = e.currentTarget;
+  t.$_vclosepopover_touch = !1;
+}
+const ie = {
+  beforeMount(e, { value: t, modifiers: o }) {
+    e.$_closePopoverModifiers = o, (typeof t > "u" || t) && ge(e);
+  },
+  updated(e, { value: t, oldValue: o, modifiers: i }) {
+    e.$_closePopoverModifiers = i, t !== o && (typeof t > "u" || t ? ge(e) : we$1(e));
+  },
+  beforeUnmount(e) {
+    we$1(e);
+  }
+}, Mt = oe$1, Bt = ie, kt = Se, Vt$1 = Ce$1;
 
 /* Injected with object hook! */
 
@@ -15361,10 +16291,16 @@ function toValue$1(r) {
 }
 const isClient$1 = typeof window !== "undefined" && typeof document !== "undefined";
 typeof WorkerGlobalScope !== "undefined" && globalThis instanceof WorkerGlobalScope;
+const isDef = (val) => typeof val !== "undefined";
 const toString$1 = Object.prototype.toString;
 const isObject$1 = (val) => toString$1.call(val) === "[object Object]";
 const noop$1 = () => {
 };
+const isIOS$1 = /* @__PURE__ */ getIsIOS$1();
+function getIsIOS$1() {
+  var _a, _b;
+  return isClient$1 && ((_a = window == null ? void 0 : window.navigator) == null ? void 0 : _a.userAgent) && (/iP(?:ad|hone|od)/.test(window.navigator.userAgent) || ((_b = window == null ? void 0 : window.navigator) == null ? void 0 : _b.maxTouchPoints) > 2 && /iPad|Macintosh/.test(window == null ? void 0 : window.navigator.userAgent));
+}
 function createFilterWrapper$1(filter, fn) {
   function wrapper(...args) {
     return new Promise((resolve, reject) => {
@@ -15438,6 +16374,28 @@ function tryOnMounted$1(fn, sync = true, target) {
   else
     nextTick(fn);
 }
+function useToggle(initialValue = false, options = {}) {
+  const {
+    truthyValue = true,
+    falsyValue = false
+  } = options;
+  const valueIsRef = isRef$1(initialValue);
+  const _value = ref(initialValue);
+  function toggle(value) {
+    if (arguments.length) {
+      _value.value = value;
+      return _value.value;
+    } else {
+      const truthy = toValue$1(truthyValue);
+      _value.value = _value.value === truthy ? toValue$1(falsyValue) : truthy;
+      return _value.value;
+    }
+  }
+  if (valueIsRef)
+    return toggle;
+  else
+    return [_value, toggle];
+}
 
 /* Injected with object hook! */
 
@@ -15495,6 +16453,51 @@ function useEventListener$1(...args) {
   tryOnScopeDispose$1(stop);
   return stop;
 }
+function createKeyPredicate(keyFilter) {
+  if (typeof keyFilter === "function")
+    return keyFilter;
+  else if (typeof keyFilter === "string")
+    return (event) => event.key === keyFilter;
+  else if (Array.isArray(keyFilter))
+    return (event) => keyFilter.includes(event.key);
+  return () => true;
+}
+function onKeyStroke(...args) {
+  let key;
+  let handler;
+  let options = {};
+  if (args.length === 3) {
+    key = args[0];
+    handler = args[1];
+    options = args[2];
+  } else if (args.length === 2) {
+    if (typeof args[1] === "object") {
+      key = true;
+      handler = args[0];
+      options = args[1];
+    } else {
+      key = args[0];
+      handler = args[1];
+    }
+  } else {
+    key = true;
+    handler = args[0];
+  }
+  const {
+    target = defaultWindow$1,
+    eventName = "keydown",
+    passive = false,
+    dedupe = false
+  } = options;
+  const predicate = createKeyPredicate(key);
+  const listener = (e) => {
+    if (e.repeat && toValue$1(dedupe))
+      return;
+    if (predicate(e))
+      handler(e);
+  };
+  return useEventListener$1(target, eventName, listener, passive);
+}
 function useMounted$1() {
   const isMounted = ref(false);
   const instance = getCurrentInstance();
@@ -15545,6 +16548,9 @@ function useMediaQuery$1(query, options = {}) {
     mediaQuery = void 0;
   });
   return matches;
+}
+function cloneFnJSON(source) {
+  return JSON.parse(JSON.stringify(source));
 }
 const _global$1 = typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : {};
 const globalKey$1 = "__vueuse_ssr_handlers__";
@@ -15797,6 +16803,157 @@ function useColorMode(options = {}) {
     return Object.assign(auto, { store, system, state });
   } catch (e) {
     return auto;
+  }
+}
+function resolveElement(el) {
+  if (typeof Window !== "undefined" && el instanceof Window)
+    return el.document.documentElement;
+  if (typeof Document !== "undefined" && el instanceof Document)
+    return el.documentElement;
+  return el;
+}
+function checkOverflowScroll(ele) {
+  const style = window.getComputedStyle(ele);
+  if (style.overflowX === "scroll" || style.overflowY === "scroll" || style.overflowX === "auto" && ele.clientWidth < ele.scrollWidth || style.overflowY === "auto" && ele.clientHeight < ele.scrollHeight) {
+    return true;
+  } else {
+    const parent = ele.parentNode;
+    if (!parent || parent.tagName === "BODY")
+      return false;
+    return checkOverflowScroll(parent);
+  }
+}
+function preventDefault(rawEvent) {
+  const e = rawEvent || window.event;
+  const _target = e.target;
+  if (checkOverflowScroll(_target))
+    return false;
+  if (e.touches.length > 1)
+    return true;
+  if (e.preventDefault)
+    e.preventDefault();
+  return false;
+}
+const elInitialOverflow = /* @__PURE__ */ new WeakMap();
+function useScrollLock(element, initialState = false) {
+  const isLocked = ref(initialState);
+  let stopTouchMoveListener = null;
+  let initialOverflow = "";
+  watch(toRef(element), (el) => {
+    const target = resolveElement(toValue$1(el));
+    if (target) {
+      const ele = target;
+      if (!elInitialOverflow.get(ele))
+        elInitialOverflow.set(ele, ele.style.overflow);
+      if (ele.style.overflow !== "hidden")
+        initialOverflow = ele.style.overflow;
+      if (ele.style.overflow === "hidden")
+        return isLocked.value = true;
+      if (isLocked.value)
+        return ele.style.overflow = "hidden";
+    }
+  }, {
+    immediate: true
+  });
+  const lock = () => {
+    const el = resolveElement(toValue$1(element));
+    if (!el || isLocked.value)
+      return;
+    if (isIOS$1) {
+      stopTouchMoveListener = useEventListener$1(
+        el,
+        "touchmove",
+        (e) => {
+          preventDefault(e);
+        },
+        { passive: false }
+      );
+    }
+    el.style.overflow = "hidden";
+    isLocked.value = true;
+  };
+  const unlock = () => {
+    const el = resolveElement(toValue$1(element));
+    if (!el || !isLocked.value)
+      return;
+    isIOS$1 && (stopTouchMoveListener == null ? void 0 : stopTouchMoveListener());
+    el.style.overflow = initialOverflow;
+    elInitialOverflow.delete(el);
+    isLocked.value = false;
+  };
+  tryOnScopeDispose$1(unlock);
+  return computed({
+    get() {
+      return isLocked.value;
+    },
+    set(v) {
+      if (v)
+        lock();
+      else unlock();
+    }
+  });
+}
+function useVModel(props, key, emit, options = {}) {
+  var _a, _b, _c;
+  const {
+    clone = false,
+    passive = false,
+    eventName,
+    deep = false,
+    defaultValue,
+    shouldEmit
+  } = options;
+  const vm = getCurrentInstance();
+  const _emit = emit || (vm == null ? void 0 : vm.emit) || ((_a = vm == null ? void 0 : vm.$emit) == null ? void 0 : _a.bind(vm)) || ((_c = (_b = vm == null ? void 0 : vm.proxy) == null ? void 0 : _b.$emit) == null ? void 0 : _c.bind(vm == null ? void 0 : vm.proxy));
+  let event = eventName;
+  if (!key) {
+    {
+      key = "modelValue";
+    }
+  }
+  event = event || `update:${key.toString()}`;
+  const cloneFn = (val) => !clone ? val : typeof clone === "function" ? clone(val) : cloneFnJSON(val);
+  const getValue2 = () => isDef(props[key]) ? cloneFn(props[key]) : defaultValue;
+  const triggerEmit = (value) => {
+    if (shouldEmit) {
+      if (shouldEmit(value))
+        _emit(event, value);
+    } else {
+      _emit(event, value);
+    }
+  };
+  if (passive) {
+    const initialValue = getValue2();
+    const proxy = ref(initialValue);
+    let isUpdating = false;
+    watch(
+      () => props[key],
+      (v) => {
+        if (!isUpdating) {
+          isUpdating = true;
+          proxy.value = cloneFn(v);
+          nextTick(() => isUpdating = false);
+        }
+      }
+    );
+    watch(
+      proxy,
+      (v) => {
+        if (!isUpdating && (v !== props[key] || deep))
+          triggerEmit(v);
+      },
+      { deep }
+    );
+    return proxy;
+  } else {
+    return computed({
+      get() {
+        return getValue2();
+      },
+      set(value) {
+        triggerEmit(value);
+      }
+    });
   }
 }
 
@@ -18135,13 +19292,175 @@ function Pe(n = {}) {
     isDark: computed(() => o.value === "dark")
   };
 }
-const Ee = {}, Le = { class: "$ui-base border $ui-border-base rounded shadow-sm" };
+const ze = { class: "$ui-dark-toggle-vtr" }, ht = /* @__PURE__ */ defineComponent({
+  __name: "DarkToggle",
+  props: {
+    isDark: { type: Boolean, default: !1 },
+    animation: { type: Boolean, default: !0 },
+    animationDuration: { default: 400 }
+  },
+  setup(n) {
+    const o = n, e = useVModel(o, "isDark"), { colorMode: s } = Pe({
+      initialValue: e.value ? "dark" : "light",
+      onChanged: (i) => {
+        e.value = i === "dark";
+      }
+    }), t = computed({
+      get: () => s.value === "dark",
+      set: (i) => s.value = i ? "dark" : "light"
+    }), l = document.startViewTransition && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    function r(i) {
+      if (!l || !i || !o.animation) {
+        t.value = !t.value;
+        return;
+      }
+      const a = i.clientX, c = i.clientY, p = Math.hypot(
+        Math.max(a, innerWidth - a),
+        Math.max(c, innerHeight - c)
+      );
+      document.startViewTransition(async () => {
+        t.value = !t.value, await nextTick();
+      }).ready.then(() => {
+        const C = [
+          `circle(0px at ${a}px ${c}px)`,
+          `circle(${p}px at ${a}px ${c}px)`
+        ];
+        document.documentElement.animate(
+          {
+            clipPath: t.value ? [...C].reverse() : C
+          },
+          {
+            duration: o.animationDuration,
+            easing: "ease-in",
+            pseudoElement: t.value ? "::view-transition-old(root)" : "::view-transition-new(root)"
+          }
+        );
+      });
+    }
+    return (i, a) => (openBlock(), createElementBlock("span", ze, [
+      renderSlot(i.$slots, "default", normalizeProps(guardReactiveProps({ mode: unref(s), isDark: t.value, toggle: r })))
+    ]));
+  }
+}), Ee = {}, Le = { class: "$ui-base border $ui-border-base rounded shadow-sm" };
 function Fe(n, o) {
   return openBlock(), createElementBlock("div", Le, [
     renderSlot(n.$slots, "default")
   ]);
 }
-const yt = /* @__PURE__ */ j(Ee, [["render", Fe]]), Xe = { class: "overflow-hidden rounded-lg shadow-lg" }, Ge = /* @__PURE__ */ createBaseVNode("div", { class: "p2 opacity-40" }, " Empty... ", -1), Je = /* @__PURE__ */ defineComponent({
+const yt = /* @__PURE__ */ j(Ee, [["render", Fe]]), oe = /* @__PURE__ */ defineComponent({
+  __name: "Overlay",
+  props: {
+    dim: { type: Boolean },
+    blur: { type: Boolean },
+    position: { default: "fixed" }
+  },
+  setup(n) {
+    return (o, e) => (openBlock(), createElementBlock("div", {
+      class: normalizeClass(["left-0 top-0 $ui-z-max h-full w-full $ui-fcc transition-opacity transition-duration-300 $ui-bg-base", [
+        o.dim ? "bg-opacity-50!" : "bg-opacity-0!",
+        o.blur ? "backdrop-blur-sm" : "",
+        o.position
+      ]])
+    }, [
+      renderSlot(o.$slots, "default")
+    ], 2));
+  }
+}), Re = { class: "h7.5 w-full $ui-fbc" }, He = { class: "text-4.5" }, Ne = /* @__PURE__ */ createBaseVNode("div", { class: "i-carbon-close" }, null, -1), We = [
+  Ne
+], Ae = { class: "content transition-all transition-duration-300" }, Oe = { class: "footer h8 w-full transition-all transition-duration-300 delay-250" }, je = { class: "$ui-fcc" }, xe = /* @__PURE__ */ defineComponent({
+  __name: "Dialog",
+  props: {
+    modelValue: { type: Boolean, default: !1 },
+    autoClose: { type: Boolean, default: !0 },
+    title: { default: "Dialog" },
+    width: { default: "32rem" },
+    height: { default: "18rem" },
+    closable: { type: Boolean, default: !0 },
+    mountTo: { default: "body" },
+    dim: { type: Boolean },
+    blur: { type: Boolean },
+    position: {}
+  },
+  emits: ["close", "update:modelValue"],
+  setup(n, { emit: o }) {
+    const e = n, t = useVModel(e, "modelValue", o, { passive: !0 }), l = useScrollLock(() => window.document.documentElement);
+    watchEffect(() => {
+      t.value ? l.value = !0 : l.value = !1;
+    });
+    function r() {
+      t.value && e.autoClose && (t.value = !1);
+    }
+    onKeyStroke("Escape", () => {
+      r();
+    });
+    const i = ref(!1);
+    return onMounted(() => i.value = !0), (a, c) => i.value || a.mountTo === "body" ? (openBlock(), createBlock(Teleport, {
+      key: 0,
+      to: a.mountTo
+    }, [
+      createVNode(Transition, {
+        "enter-from-class": "opacity-0 [&_.modal]:scale-95 [&_.content,&_.footer]:translate-y--2.5 [&_.content,&_.footer]:opacity-0",
+        "enter-to-class": "opacity-100 [&_.modal]:scale-100",
+        "leave-from-class": "opacity-100 [&_.modal]:scale-100",
+        "leave-to-class": "opacity-0 [&_.modal]:scale-95"
+      }, {
+        default: withCtx(() => [
+          unref(t) ? (openBlock(), createBlock(oe, {
+            key: 0,
+            dim: a.dim,
+            blur: a.blur,
+            position: a.position
+          }, {
+            default: withCtx(() => [
+              createBaseVNode("div", {
+                class: "modal relative grid grid-rows-[1.875rem_1fr_2.5rem] $ui-base max-h-[calc(100vh-6.25rem)] max-w-[calc(100vw-6.25rem)] min-h-6.25rem min-w-12.5rem gap-2.5 rounded-md bg-white px6 py4.5 color-gray-800 shadow-2xl transition-transform transition-duration-300 dark:bg-gray-900 dark:color-gray-200",
+                style: normalizeStyle({
+                  width: e.width,
+                  height: e.height
+                })
+              }, [
+                createBaseVNode("div", Re, [
+                  createBaseVNode("div", He, [
+                    renderSlot(a.$slots, "title", {}, () => [
+                      createTextVNode(toDisplayString(e.title), 1)
+                    ])
+                  ]),
+                  a.closable ? (openBlock(), createElementBlock("div", {
+                    key: 0,
+                    class: "h6 w6 $ui-fcc cursor-pointer rounded-full transition-colors hover:bg-primary-100 dark:hover:bg-gray-700",
+                    onClick: r
+                  }, We)) : createCommentVNode("", !0)
+                ]),
+                createBaseVNode("div", Ae, [
+                  renderSlot(a.$slots, "default")
+                ]),
+                createBaseVNode("div", Oe, [
+                  renderSlot(a.$slots, "footer", {}, () => [
+                    renderSlot(a.$slots, "footer", {}, () => [
+                      createBaseVNode("div", je, [
+                        createVNode(M$1, {
+                          type: "primary",
+                          onClick: r
+                        }, {
+                          default: withCtx(() => [
+                            createTextVNode(" close ")
+                          ]),
+                          _: 1
+                        })
+                      ])
+                    ])
+                  ])
+                ])
+              ], 4)
+            ]),
+            _: 3
+          }, 8, ["dim", "blur", "position"])) : createCommentVNode("", !0)
+        ]),
+        _: 3
+      })
+    ], 8, ["to"])) : createCommentVNode("", !0);
+  }
+}), Xe = { class: "overflow-hidden rounded-lg shadow-lg" }, Ge = /* @__PURE__ */ createBaseVNode("div", { class: "p2 opacity-40" }, " Empty... ", -1), Je = /* @__PURE__ */ defineComponent({
   __name: "Dropdown",
   props: {
     label: {},
@@ -18204,6 +19523,195 @@ const yt = /* @__PURE__ */ j(Ee, [["render", Fe]]), Xe = { class: "overflow-hidd
       _: 3
     }, 8, ["disabled", "shown", "triggers", "distance", "placement", "skidding"]));
   }
+}), Qe = { class: "$ui-fec gap2.5" }, $t = /* @__PURE__ */ defineComponent({
+  __name: "Confirm",
+  props: {
+    modelValue: { type: Boolean },
+    content: {},
+    cancelText: { default: "Cancel" },
+    confirmText: { default: "Confirm" },
+    width: { default: "20%" },
+    height: { default: "9rem" },
+    title: { default: "Warning" },
+    loading: { type: Boolean, default: !1 },
+    autoClose: { type: Boolean, default: !0 }
+  },
+  emits: ["update:modelValue", "confirm", "cancel", "close"],
+  setup(n, { emit: o }) {
+    const e = n, s = o, t = useVModel(e, "modelValue", s);
+    watchEffect(() => {
+      t.value || s("close");
+    });
+    function l(r = !1) {
+      (e.autoClose || r) && (t.value = !1);
+    }
+    return (r, i) => (openBlock(), createBlock(xe, {
+      modelValue: unref(t),
+      "onUpdate:modelValue": i[2] || (i[2] = (a) => isRef$1(t) ? t.value = a : null),
+      width: r.width,
+      height: r.height,
+      title: r.title,
+      closable: !1
+    }, {
+      footer: withCtx(() => [
+        createBaseVNode("div", Qe, [
+          createVNode(M$1, {
+            onClick: i[0] || (i[0] = () => {
+              s("cancel"), l(!0);
+            })
+          }, {
+            default: withCtx(() => [
+              createTextVNode(toDisplayString(r.cancelText), 1)
+            ]),
+            _: 1
+          }),
+          createVNode(M$1, {
+            loading: r.loading,
+            type: "primary",
+            onClick: i[1] || (i[1] = () => {
+              s("confirm"), l();
+            })
+          }, {
+            default: withCtx(() => [
+              createTextVNode(toDisplayString(r.confirmText), 1)
+            ]),
+            _: 1
+          }, 8, ["loading"])
+        ])
+      ]),
+      default: withCtx(() => [
+        renderSlot(r.$slots, "default", { class: "h-auto w-auto" }, () => [
+          createTextVNode(toDisplayString(r.content), 1)
+        ])
+      ]),
+      _: 3
+    }, 8, ["modelValue", "width", "height", "title"]));
+  }
+}), Ze = { class: "m1 min-w-35 w-auto flex flex-col" }, et = ["onClick"], tt = /* @__PURE__ */ createBaseVNode("div", { class: "i-mdi-chevron-down" }, null, -1), _t = /* @__PURE__ */ defineComponent({
+  __name: "Select",
+  props: {
+    modelValue: {},
+    multiple: { default: !1 },
+    options: {},
+    placeholder: { default: "Select..." },
+    autoClose: { type: Boolean, default: !0 },
+    disabled: { type: Boolean, default: !1 },
+    labelRenderer: { type: Function, default: (n) => String(n) },
+    buttonProps: { default: () => ({}) }
+  },
+  emits: ["update:modelValue"],
+  setup(n, { emit: o }) {
+    const e = n, s = o, t = useSlots(), l = computed({
+      get: () => e.modelValue,
+      set: (a) => s("update:modelValue", a)
+    }), r = computed(() => {
+      const a = e.options.find((c) => c.value === l.value);
+      return a != null && a.label ? e.labelRenderer(a.label) : e.placeholder;
+    });
+    function i(a) {
+      e.multiple ? l.value = l.value.includes(a.value) ? l.value.filter((c) => c !== a.value) : [...l.value, a.value] : l.value = a.value;
+    }
+    return (a, c) => (openBlock(), createBlock(Je, mergeProps({ label: r.value }, {
+      buttonProps: a.buttonProps,
+      disabled: a.disabled
+    }), createSlots({
+      popper: withCtx(() => [
+        createBaseVNode("div", Ze, [
+          unref(t).item ? (openBlock(!0), createElementBlock(Fragment, { key: 0 }, renderList(a.options, (p) => (openBlock(), createElementBlock("div", {
+            key: p.value,
+            class: "cursor-pointer",
+            onClick: (u) => i(p)
+          }, [
+            renderSlot(a.$slots, "item", mergeProps({ ref_for: !0 }, {
+              item: p,
+              active: a.multiple ? l.value.includes(p.value) : p.value === l.value,
+              disabled: a.disabled
+            }))
+          ], 8, et))), 128)) : (openBlock(!0), createElementBlock(Fragment, { key: 1 }, renderList(a.options, (p) => withDirectives((openBlock(), createBlock(M$1, {
+            key: p.value,
+            disabled: a.disabled,
+            round: "normal",
+            class: normalizeClass(["flex-[auto_1_1] not-hover:[&:not(.active)]:bg-transparent!", {
+              active: a.multiple ? l.value.includes(p.value) : p.value === l.value
+            }]),
+            onClick: (u) => i(p)
+          }, {
+            default: withCtx(() => [
+              createTextVNode(toDisplayString(p.label), 1)
+            ]),
+            _: 2
+          }, 1032, ["disabled", "class", "onClick"])), [
+            [unref(Bt), a.autoClose]
+          ])), 128))
+        ])
+      ]),
+      "button-icon-right": withCtx(() => [
+        tt
+      ]),
+      _: 2
+    }, [
+      unref(t).button ? {
+        name: "default",
+        fn: withCtx(() => [
+          renderSlot(a.$slots, "button")
+        ]),
+        key: "0"
+      } : void 0
+    ]), 1040, ["label"]));
+  }
+}), Ct = /* @__PURE__ */ defineComponent({
+  __name: "Switch",
+  props: {
+    modelValue: { type: Boolean },
+    disabled: { type: Boolean }
+  },
+  emits: ["update:modelValue"],
+  setup(n, { emit: o }) {
+    const t = useVModel(n, "modelValue", o), l = useToggle(t);
+    return (r, i) => (openBlock(), createElementBlock("div", {
+      class: normalizeClass([[
+        r.disabled ? "cursor-not-allowed" : "cursor-pointer"
+      ], "$ui-base $ui-if-sc cursor-pointer select-none gap1.25 vertical-mid text-3.5"]),
+      role: "checkbox",
+      onClick: i[0] || (i[0] = (a) => !r.disabled && unref(l)())
+    }, [
+      renderSlot(r.$slots, "default"),
+      createBaseVNode("div", {
+        class: normalizeClass([{
+          selected: unref(t)
+        }, "group relative $ui-base h4 w8 rounded-2 bg-primary-100 transition-colors dark:bg-gray-700 [&.selected]:bg-primary-500!"])
+      }, [
+        createBaseVNode("div", {
+          class: normalizeClass(["h4 w4 rounded-full bg-primary-800 transition-transform group-[&.selected]:transform-translate-x-4 dark:bg-white", [
+            { "group-hover:opacity-75 group-active:scale-85": !r.disabled },
+            { "opacity-65": r.disabled }
+          ]])
+        }, null, 2)
+      ], 2)
+    ], 2));
+  }
+}), Vt = /* @__PURE__ */ defineComponent({
+  __name: "Checkbox",
+  props: {
+    modelValue: { type: Boolean },
+    variant: { default: "normal" }
+  },
+  emits: ["update:modelValue"],
+  setup(n, { emit: o }) {
+    const t = useVModel(n, "modelValue", o);
+    return (l, r) => (openBlock(), createElementBlock("div", {
+      class: normalizeClass(["relative $ui-base h5 w5 $ui-inline-fcc cursor-pointer border-0.125rem rounded-1.25 transition-colors duration-200 ease-in-out", [
+        unref(t) ? l.variant === "normal" ? "bg-primary-500 border-primary-200 dark:border-primary-100" : "bg-accent-500 border-accent-200 dark:border-accent-100" : ""
+      ]]),
+      onClick: r[0] || (r[0] = (i) => t.value = !unref(t))
+    }, [
+      createBaseVNode("div", {
+        class: normalizeClass([[
+          unref(t) ? "opacity-100" : "opacity-0"
+        ], "h-60% w-35% transform-translate-y--0.25 transform-rotate-45 border-width-[0_0.125rem_0.125rem_0] border-white border-solid transition-opacity duration-200 ease-in-out"])
+      }, null, 2)
+    ], 2));
+  }
 }), Tt = /* @__PURE__ */ defineComponent({
   __name: "Tooltip",
   props: {
@@ -18215,7 +19723,7 @@ const yt = /* @__PURE__ */ j(Ee, [["render", Fe]]), Xe = { class: "overflow-hidd
     shown: { type: Boolean }
   },
   setup(n) {
-    return (o, e) => (openBlock(), createBlock(unref(Vt), mergeProps({
+    return (o, e) => (openBlock(), createBlock(unref(Vt$1), mergeProps({
       disabled: o.disabled,
       placement: o.placement
     }, o.$attrs), {
@@ -18257,6 +19765,38 @@ function tryOnScopeDispose(fn) {
 }
 function toValue(r) {
   return typeof r === "function" ? r() : unref(r);
+}
+function toReactive(objectRef) {
+  if (!isRef$1(objectRef))
+    return reactive(objectRef);
+  const proxy = new Proxy({}, {
+    get(_, p, receiver) {
+      return unref(Reflect.get(objectRef.value, p, receiver));
+    },
+    set(_, p, value) {
+      if (isRef$1(objectRef.value[p]) && !isRef$1(value))
+        objectRef.value[p].value = value;
+      else
+        objectRef.value[p] = value;
+      return true;
+    },
+    deleteProperty(_, p) {
+      return Reflect.deleteProperty(objectRef.value, p);
+    },
+    has(_, p) {
+      return Reflect.has(objectRef.value, p);
+    },
+    ownKeys() {
+      return Object.keys(objectRef.value);
+    },
+    getOwnPropertyDescriptor() {
+      return {
+        enumerable: true,
+        configurable: true
+      };
+    }
+  });
+  return reactive(proxy);
 }
 const isClient = typeof window !== "undefined" && typeof document !== "undefined";
 typeof WorkerGlobalScope !== "undefined" && globalThis instanceof WorkerGlobalScope;
@@ -18749,6 +20289,630 @@ function useWindowSize(options = {}) {
 
 /* Injected with object hook! */
 
+function useHostEnv() {
+  if (isInElectron) return "electron";
+  if (isInChromePanel) return "chrome";
+  if (isInIframe) return "iframe";
+  return "separate-window";
+}
+
+/* Injected with object hook! */
+
+function clientStateFactory() {
+  return {
+    isFirstVisit: true,
+    route: "/",
+    tabSettings: {
+      hiddenTabCategories: [],
+      hiddenTabs: [],
+      pinnedTabs: []
+    },
+    expandSidebar: false,
+    scrollableSidebar: true,
+    splitScreen: {
+      enabled: false,
+      view: "overview",
+      size: [50, 50]
+    },
+    scale: 1,
+    interactionCloseOnOutsideClick: false,
+    showPanel: true,
+    minimizePanelInteractive: 5e3
+  };
+}
+const devtoolsClientState = useLocalStorage(
+  "__TMAGIC_DEVTOOLS_CLIENT_STATE__",
+  clientStateFactory(),
+  { mergeDefaults: true }
+);
+function resetDevtoolsClientState() {
+  devtoolsClientState.value = clientStateFactory();
+}
+watch(
+  () => devtoolsClientState.value.splitScreen.enabled,
+  (enabled, o) => {
+    if (o && !enabled) {
+      devtoolsClientState.value.splitScreen.size = [50, 50];
+    }
+  }
+);
+
+/* Injected with object hook! */
+
+function getDefaultExportFromCjs (x) {
+	return x && x.__esModule && Object.prototype.hasOwnProperty.call(x, 'default') ? x['default'] : x;
+}
+
+/* Injected with object hook! */
+
+// do not edit .js files directly - edit src/index.jst
+
+
+
+var fastDeepEqual = function equal(a, b) {
+  if (a === b) return true;
+
+  if (a && b && typeof a == 'object' && typeof b == 'object') {
+    if (a.constructor !== b.constructor) return false;
+
+    var length, i, keys;
+    if (Array.isArray(a)) {
+      length = a.length;
+      if (length != b.length) return false;
+      for (i = length; i-- !== 0;)
+        if (!equal(a[i], b[i])) return false;
+      return true;
+    }
+
+
+
+    if (a.constructor === RegExp) return a.source === b.source && a.flags === b.flags;
+    if (a.valueOf !== Object.prototype.valueOf) return a.valueOf() === b.valueOf();
+    if (a.toString !== Object.prototype.toString) return a.toString() === b.toString();
+
+    keys = Object.keys(a);
+    length = keys.length;
+    if (length !== Object.keys(b).length) return false;
+
+    for (i = length; i-- !== 0;)
+      if (!Object.prototype.hasOwnProperty.call(b, keys[i])) return false;
+
+    for (i = length; i-- !== 0;) {
+      var key = keys[i];
+
+      if (!equal(a[key], b[key])) return false;
+    }
+
+    return true;
+  }
+
+  // true if both NaN, false otherwise
+  return a!==a && b!==b;
+};
+
+const equal = /*@__PURE__*/getDefaultExportFromCjs(fastDeepEqual);
+/* Injected with object hook! */
+
+const builtinTab = [
+  [
+    "app",
+    [
+      {
+        icon: "i-carbon-information",
+        name: "overview",
+        order: -100,
+        path: "overview",
+        title: "Overview"
+      },
+      {
+        icon: "i-carbon-assembly-cluster",
+        name: "nodes",
+        order: -100,
+        path: "nodes",
+        title: "Nodes"
+      },
+      {
+        icon: "i-carbon-tree-view-alt",
+        name: "pages",
+        order: -100,
+        path: "pages",
+        title: "Pages"
+      }
+    ]
+  ]
+];
+function getBuiltinTab() {
+  const tab = deepClone(builtinTab);
+  return tab;
+}
+const CUSTOM_TAB_VIEW = "custom-tab-view";
+const CUSTOM_INSPECTOR_TAB_VIEW = "custom-inspector-tab-view";
+
+/* Injected with object hook! */
+
+function useAllTabs() {
+  const state = useDevToolsState();
+  let cachedCustomTabs = [];
+  const customTabs = computed(() => {
+    if (equal(state.tabs.value, cachedCustomTabs))
+      return cachedCustomTabs;
+    cachedCustomTabs = state.tabs.value;
+    return state.tabs.value;
+  });
+  const allTabs = computed(() => {
+    const vitePluginDetected = state.vitePluginDetected.value;
+    const tabs = [...getBuiltinTab()];
+    customTabs.value.forEach((tab) => {
+      const currentTab = tabs.find(
+        (t) => t[0] === tab.category
+      );
+      if (currentTab) {
+        if (currentTab[1].some((t) => t.name === tab.name)) return;
+        if (!vitePluginDetected || isInElectron || isInChromePanel) return;
+        currentTab[1].push({
+          ...tab
+        });
+      }
+    });
+    return [...tabs];
+  });
+  const flattenedTabs = computed(
+    () => allTabs.value.reduce((prev, [, tabs]) => {
+      tabs.forEach((tab) => {
+        prev.push(tab);
+      });
+      return prev;
+    }, [])
+  );
+  const categorizedTabs = computed(() => {
+    const { hiddenTabCategories, hiddenTabs, pinnedTabs } = devtoolsClientState.value.tabSettings;
+    const pinnedHidden = hiddenTabCategories.includes("pinned");
+    const tabs = allTabs.value.reduce(
+      (prev, [category, tabs2]) => {
+        const data = [{ hidden: false, name: category }, []];
+        const categoryHidden = hiddenTabCategories.includes(category);
+        tabs2.forEach((tab) => {
+          const tabHidden = hiddenTabs.includes(tab.name);
+          if (pinnedTabs.includes(tab.name)) {
+            prev[0][1].push({
+              ...tab,
+              hidden: tabHidden || pinnedHidden
+            });
+          } else {
+            const hidden = tabHidden || categoryHidden;
+            data[1].push({ ...tab, hidden });
+          }
+        });
+        data[0].hidden = data[1].every((t) => t.hidden);
+        prev.push(data);
+        return prev;
+      },
+      [[{ name: "pinned", hidden: false }, []]]
+    );
+    tabs[0][0].hidden = tabs[0][1].every((t) => t.hidden);
+    tabs[0][1].sort((a, b) => pinnedTabs.indexOf(a.name) - pinnedTabs.indexOf(b.name));
+    return tabs;
+  });
+  const enabledTabs = computed(
+    () => categorizedTabs.value.reduce((prev, [meta, tabs]) => {
+      if (meta.hidden) return prev;
+      const filtered = tabs.filter((t) => !t.hidden);
+      if (filtered.length) prev.push([meta, filtered]);
+      return prev;
+    }, [])
+  );
+  const enabledFlattenTabs = computed(
+    () => enabledTabs.value.reduce((prev, [, tabs]) => {
+      tabs.forEach((tab) => {
+        prev.push(tab);
+      });
+      return prev;
+    }, [])
+  );
+  return { categorizedTabs, flattenedTabs, enabledTabs, enabledFlattenTabs };
+}
+function getCategorizedTabs(flattenTabs, enabledTabs) {
+  return computed(() => {
+    const categories = [];
+    const { pinnedTabs } = devtoolsClientState.value.tabSettings;
+    const tabs = toValue$2(enabledTabs).reduce(
+      (prev, [{ name: cateName, hidden }, tabs2]) => {
+        tabs2.forEach((tab) => {
+          if (toValue$2(flattenTabs).some((i) => i.name === tab.name)) {
+            const category = pinnedTabs.includes(tab.name) ? "pinned" : cateName || "app";
+            prev.push({
+              tab,
+              category: {
+                name: category,
+                hidden
+              }
+            });
+          }
+        });
+        return prev;
+      },
+      []
+    );
+    tabs.forEach(({ tab, category }) => {
+      const cates = categories.find(([{ name }]) => name === category.name);
+      if (!cates) categories.push([category, [tab]]);
+      else cates[1].push(tab);
+    });
+    const pinned = categories.find(([{ name }]) => name === "pinned");
+    if (pinned) pinned[1].sort((a, b) => pinnedTabs.indexOf(a.name) - pinnedTabs.indexOf(b.name));
+    return categories;
+  });
+}
+
+/* Injected with object hook! */
+
+const _hoisted_1$a = {
+  "h-full": "",
+  "w-full": "",
+  "of-auto": "",
+  px8: "",
+  py6: ""
+};
+const _hoisted_2$8 = {
+  grid: "~ md:cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-x-10 gap-y-3",
+  "max-w-300": ""
+};
+const _hoisted_3$6 = { flex: "~ col gap-2" };
+const _hoisted_4$6 = /* @__PURE__ */ createBaseVNode("h3", { "text-lg": "" }, "Tabs", -1);
+const _hoisted_5$4 = {
+  flex: "~ gap-2",
+  "flex-auto": "",
+  "items-center": "",
+  "justify-start": ""
+};
+const _hoisted_6$4 = {
+  capitalize: "",
+  op75: ""
+};
+const _hoisted_7$3 = /* @__PURE__ */ createBaseVNode("div", {
+  "mx--1": "",
+  my1: "",
+  "h-1px": "",
+  border: "b base",
+  op75: ""
+}, null, -1);
+const _hoisted_8$3 = {
+  flex: "~ gap-2",
+  "flex-auto": "",
+  "items-center": "",
+  "justify-start": "",
+  "pr-4": "",
+  "text-sm": ""
+};
+const _hoisted_9$3 = /* @__PURE__ */ createBaseVNode("div", { "flex-auto": "" }, null, -1);
+const _hoisted_10$3 = ["onClick"];
+const _hoisted_11$3 = /* @__PURE__ */ createBaseVNode("div", { class: "i-carbon-caret-up" }, null, -1);
+const _hoisted_12$1 = [
+  _hoisted_11$3
+];
+const _hoisted_13$1 = ["onClick"];
+const _hoisted_14$1 = /* @__PURE__ */ createBaseVNode("div", { class: "i-carbon-caret-down" }, null, -1);
+const _hoisted_15$1 = [
+  _hoisted_14$1
+];
+const _hoisted_16$1 = ["onClick"];
+const _hoisted_17$1 = { flex: "~ col gap-2" };
+const _hoisted_18$1 = /* @__PURE__ */ createBaseVNode("h3", { "text-lg": "" }, "Appearance", -1);
+const _hoisted_19$1 = { flex: "~ gap2" };
+const _hoisted_20$1 = /* @__PURE__ */ createBaseVNode("div", {
+  "i-carbon-sun": "",
+  "dark:i-carbon-moon": "",
+  "translate-y--1px": ""
+}, null, -1);
+const _hoisted_21$1 = /* @__PURE__ */ createBaseVNode("div", {
+  "mx--2": "",
+  my1: "",
+  "h-1px": "",
+  border: "b base",
+  op75: ""
+}, null, -1);
+const _hoisted_22$1 = /* @__PURE__ */ createBaseVNode("p", null, "UI Scale", -1);
+const _hoisted_23$1 = /* @__PURE__ */ createBaseVNode("div", {
+  "mx--2": "",
+  my1: "",
+  "h-1px": "",
+  border: "b base",
+  op75: ""
+}, null, -1);
+const _hoisted_24$1 = { class: "flex items-center gap2 text-sm" };
+const _hoisted_25$1 = /* @__PURE__ */ createBaseVNode("span", { op75: "" }, "Expand Sidebar", -1);
+const _hoisted_26$1 = { class: "flex items-center gap2 text-sm" };
+const _hoisted_27 = /* @__PURE__ */ createBaseVNode("span", { op75: "" }, "Scrollable Sidebar", -1);
+const _hoisted_28 = /* @__PURE__ */ createBaseVNode("h3", {
+  mt2: "",
+  "text-lg": ""
+}, "Features", -1);
+const _hoisted_29 = { class: "flex items-center gap2 text-sm" };
+const _hoisted_30 = /* @__PURE__ */ createBaseVNode("span", { op75: "" }, "Close DevTools when clicking outside", -1);
+const _hoisted_31 = { class: "flex items-center gap2 text-sm" };
+const _hoisted_32 = /* @__PURE__ */ createBaseVNode("span", { op75: "" }, "Always show the floating panel", -1);
+const _hoisted_33 = /* @__PURE__ */ createBaseVNode("div", {
+  "mx--2": "",
+  my1: "",
+  "h-1px": "",
+  border: "b base",
+  op75: ""
+}, null, -1);
+const _hoisted_34 = /* @__PURE__ */ createBaseVNode("p", null, "Minimize floating panel on inactive", -1);
+const _hoisted_35 = /* @__PURE__ */ createBaseVNode("h3", {
+  mt2: "",
+  "text-lg": ""
+}, "Debug", -1);
+const _hoisted_36 = { flex: "~ gap-2" };
+const _hoisted_37 = /* @__PURE__ */ createBaseVNode("div", { "i-carbon-breaking-change": "" }, null, -1);
+const _sfc_main$a = /* @__PURE__ */ defineComponent({
+  __name: "settings",
+  setup(__props) {
+    const { categorizedTabs: categories } = useAllTabs();
+    const hostEnv = useHostEnv();
+    const enableFeatureSettings = hostEnv === "iframe" || hostEnv === "separate-window";
+    const { scale, interactionCloseOnOutsideClick, showPanel, minimizePanelInteractive, expandSidebar, scrollableSidebar } = toRefs(toReactive(devtoolsClientState));
+    const scaleOptions = [
+      ["Tiny", 12 / 15],
+      ["Small", 14 / 15],
+      ["Normal", 1],
+      ["Large", 16 / 15],
+      ["Huge", 18 / 15]
+    ];
+    const MinimizeInactiveOptions = [
+      ["Always", 0],
+      ["1s", 1e3],
+      ["2s", 2e3],
+      ["5s", 5e3],
+      ["10s", 1e4],
+      ["Never", -1]
+    ];
+    const { hiddenTabCategories, hiddenTabs, pinnedTabs } = toRefs(devtoolsClientState.value.tabSettings);
+    function toggleTab(name, v) {
+      if (v) hiddenTabs.value = hiddenTabs.value.filter((i) => i !== name);
+      else hiddenTabs.value.push(name);
+    }
+    function toggleTabCategory(name, v) {
+      if (v) hiddenTabCategories.value = hiddenTabCategories.value.filter((i) => i !== name);
+      else hiddenTabCategories.value.push(name);
+    }
+    function togglePinTab(name) {
+      if (pinnedTabs.value.includes(name)) pinnedTabs.value = pinnedTabs.value.filter((i) => i !== name);
+      else pinnedTabs.value.push(name);
+    }
+    function pinMove(name, delta) {
+      const index = pinnedTabs.value.indexOf(name);
+      if (index === -1) return;
+      const newIndex = index + delta;
+      if (newIndex < 0 || newIndex >= pinnedTabs.value.length) return;
+      const newPinnedTabs = [...pinnedTabs.value];
+      newPinnedTabs.splice(index, 1);
+      newPinnedTabs.splice(newIndex, 0, name);
+      pinnedTabs.value = newPinnedTabs;
+    }
+    const clearOptionsConfirmState = ref(false);
+    async function clearOptions() {
+      resetDevtoolsClientState();
+      window.location.reload();
+    }
+    const minimizePanelInteractiveOptions = MinimizeInactiveOptions.map(([label, value]) => ({ label, value }));
+    const minimizePanelInteractiveLabel = computed(() => {
+      const option = minimizePanelInteractiveOptions.find((i) => i.value === minimizePanelInteractive.value);
+      return `${option?.label ?? "Select..."}`;
+    });
+    return (_ctx, _cache) => {
+      const _component_IconTitle = resolveComponent("IconTitle");
+      const _component_TabIcon = resolveComponent("TabIcon");
+      return openBlock(), createElementBlock("div", _hoisted_1$a, [
+        createVNode(_component_IconTitle, {
+          class: "mb-5 text-xl op75",
+          icon: "i-carbon-settings-adjust",
+          text: "DevTools Settings"
+        }),
+        createBaseVNode("div", _hoisted_2$8, [
+          createBaseVNode("div", _hoisted_3$6, [
+            _hoisted_4$6,
+            (openBlock(true), createElementBlock(Fragment, null, renderList(unref(categories), ([{ name, hidden }, tabs]) => {
+              return openBlock(), createElementBlock(Fragment, { key: name }, [
+                tabs.length ? (openBlock(), createBlock(unref(yt), {
+                  key: 0,
+                  p3: "",
+                  flex: "~ col gap-1",
+                  class: normalizeClass(hidden ? "op50 grayscale" : "")
+                }, {
+                  default: withCtx(() => [
+                    createVNode(unref(Ct), {
+                      "model-value": !unref(hiddenTabCategories).includes(name),
+                      class: "row-reverse flex hover:bg-active py1 pl2 pr1",
+                      "onUpdate:modelValue": (v) => toggleTabCategory(name, v)
+                    }, {
+                      default: withCtx(() => [
+                        createBaseVNode("div", _hoisted_5$4, [
+                          createBaseVNode("span", _hoisted_6$4, toDisplayString(name), 1)
+                        ])
+                      ]),
+                      _: 2
+                    }, 1032, ["model-value", "onUpdate:modelValue"]),
+                    _hoisted_7$3,
+                    (openBlock(true), createElementBlock(Fragment, null, renderList(tabs, (tab) => {
+                      return openBlock(), createBlock(unref(Ct), {
+                        key: tab.name,
+                        class: normalizeClass(["row-reverse n-primary flex hover:bg-active py1 pl2 pr1", tab.hidden ? "op35" : ""]),
+                        "model-value": !unref(hiddenTabs).includes(tab.name),
+                        "onUpdate:modelValue": (v) => toggleTab(tab.name, v)
+                      }, {
+                        default: withCtx(() => [
+                          createBaseVNode("div", _hoisted_8$3, [
+                            createVNode(_component_TabIcon, {
+                              "text-xl": "",
+                              icon: tab.icon,
+                              fallback: tab.fallbackIcon,
+                              title: tab.title
+                            }, null, 8, ["icon", "fallback", "title"]),
+                            createBaseVNode("span", null, toDisplayString(tab.title), 1),
+                            _hoisted_9$3,
+                            unref(pinnedTabs).includes(tab.name) ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+                              createBaseVNode("button", {
+                                class: "flex items-center hover:bg-active hover:op100 px1 py1 text-sm op65",
+                                onClick: withModifiers(
+                                  () => {
+                                    if (unref(pinnedTabs).indexOf(tab.name) === 0) return;
+                                    pinMove(tab.name, -1);
+                                  },
+                                  ["stop"]
+                                )
+                              }, _hoisted_12$1, 8, _hoisted_10$3),
+                              createBaseVNode("button", {
+                                class: "flex items-center hover:bg-active hover:op100 px1 py1 text-sm op65",
+                                onClick: withModifiers(
+                                  () => {
+                                    if (unref(pinnedTabs).indexOf(tab.name) === unref(pinnedTabs).length - 1) return;
+                                    pinMove(tab.name, 1);
+                                  },
+                                  ["stop"]
+                                )
+                              }, _hoisted_15$1, 8, _hoisted_13$1)
+                            ], 64)) : createCommentVNode("", true),
+                            createBaseVNode("button", {
+                              class: "flex items-center hover:bg-active hover:op100 px1 py1 text-sm op65",
+                              onClick: withModifiers(($event) => togglePinTab(tab.name), ["stop"])
+                            }, [
+                              createBaseVNode("div", {
+                                class: normalizeClass(unref(pinnedTabs).includes(tab.name) ? " i-carbon-pin-filled rotate--45" : " i-carbon-pin op45")
+                              }, null, 2)
+                            ], 8, _hoisted_16$1)
+                          ])
+                        ]),
+                        _: 2
+                      }, 1032, ["model-value", "class", "onUpdate:modelValue"]);
+                    }), 128))
+                  ]),
+                  _: 2
+                }, 1032, ["class"])) : createCommentVNode("", true)
+              ], 64);
+            }), 128))
+          ]),
+          createBaseVNode("div", _hoisted_17$1, [
+            _hoisted_18$1,
+            createVNode(unref(yt), {
+              p4: "",
+              flex: "~ col gap-2"
+            }, {
+              default: withCtx(() => [
+                createBaseVNode("div", _hoisted_19$1, [
+                  createVNode(unref(ht), null, {
+                    default: withCtx(({ isDark, toggle }) => [
+                      createVNode(unref(M$1), {
+                        outlined: "",
+                        type: "primary",
+                        onClick: toggle
+                      }, {
+                        default: withCtx(() => [
+                          _hoisted_20$1,
+                          createTextVNode(" " + toDisplayString(isDark ? "Dark" : "Light"), 1)
+                        ]),
+                        _: 2
+                      }, 1032, ["onClick"])
+                    ]),
+                    _: 1
+                  })
+                ]),
+                _hoisted_21$1,
+                _hoisted_22$1,
+                createBaseVNode("div", null, [
+                  createVNode(unref(_t), {
+                    modelValue: unref(scale),
+                    "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => isRef$1(scale) ? scale.value = $event : null),
+                    options: scaleOptions.map(([label, value]) => ({ label, value })),
+                    "button-props": { outlined: true }
+                  }, null, 8, ["modelValue", "options"])
+                ]),
+                _hoisted_23$1,
+                createBaseVNode("div", _hoisted_24$1, [
+                  createVNode(unref(Vt), {
+                    modelValue: unref(expandSidebar),
+                    "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => isRef$1(expandSidebar) ? expandSidebar.value = $event : null)
+                  }, null, 8, ["modelValue"]),
+                  _hoisted_25$1
+                ]),
+                createBaseVNode("div", _hoisted_26$1, [
+                  createVNode(unref(Vt), {
+                    modelValue: unref(scrollableSidebar),
+                    "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => isRef$1(scrollableSidebar) ? scrollableSidebar.value = $event : null)
+                  }, null, 8, ["modelValue"]),
+                  _hoisted_27
+                ])
+              ]),
+              _: 1
+            }),
+            unref(enableFeatureSettings) ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+              _hoisted_28,
+              createVNode(unref(yt), {
+                p4: "",
+                flex: "~ col gap-2"
+              }, {
+                default: withCtx(() => [
+                  createBaseVNode("div", _hoisted_29, [
+                    createVNode(unref(Vt), {
+                      modelValue: unref(interactionCloseOnOutsideClick),
+                      "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => isRef$1(interactionCloseOnOutsideClick) ? interactionCloseOnOutsideClick.value = $event : null)
+                    }, null, 8, ["modelValue"]),
+                    _hoisted_30
+                  ]),
+                  createBaseVNode("div", _hoisted_31, [
+                    createVNode(unref(Vt), {
+                      modelValue: unref(showPanel),
+                      "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => isRef$1(showPanel) ? showPanel.value = $event : null)
+                    }, null, 8, ["modelValue"]),
+                    _hoisted_32
+                  ]),
+                  _hoisted_33,
+                  _hoisted_34,
+                  createBaseVNode("div", null, [
+                    createVNode(unref(_t), {
+                      modelValue: unref(minimizePanelInteractive),
+                      "onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => isRef$1(minimizePanelInteractive) ? minimizePanelInteractive.value = $event : null),
+                      "button-props": { outlined: true },
+                      options: unref(minimizePanelInteractiveOptions),
+                      placeholder: minimizePanelInteractiveLabel.value
+                    }, null, 8, ["modelValue", "options", "placeholder"])
+                  ])
+                ]),
+                _: 1
+              })
+            ], 64)) : createCommentVNode("", true),
+            _hoisted_35,
+            createBaseVNode("div", _hoisted_36, [
+              createVNode(unref(M$1), {
+                outlined: "",
+                type: "warning",
+                onClick: _cache[6] || (_cache[6] = ($event) => clearOptionsConfirmState.value = true)
+              }, {
+                default: withCtx(() => [
+                  _hoisted_37,
+                  createTextVNode(" Reset Local Settings & State ")
+                ]),
+                _: 1
+              }),
+              createVNode(unref($t), {
+                modelValue: clearOptionsConfirmState.value,
+                "onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => clearOptionsConfirmState.value = $event),
+                title: "Clear Local Settings & State",
+                width: "40%",
+                height: "200px",
+                content: "Are you sure you to reset all local settings & state? Devtools will reload.",
+                onConfirm: clearOptions
+              }, null, 8, ["modelValue"])
+            ])
+          ])
+        ])
+      ]);
+    };
+  }
+});
+
+/* Injected with object hook! */
+
 const M = {
   name: "splitpanes",
   emits: ["ready", "resize", "resized", "pane-click", "pane-maximize", "pane-add", "pane-remove", "splitter-click"],
@@ -19179,44 +21343,6 @@ const _sfc_main$8 = /* @__PURE__ */ defineComponent({
 
 /* Injected with object hook! */
 
-function clientStateFactory() {
-  return {
-    isFirstVisit: true,
-    route: "/",
-    tabSettings: {
-      hiddenTabCategories: [],
-      hiddenTabs: [],
-      pinnedTabs: []
-    },
-    expandSidebar: false,
-    scrollableSidebar: true,
-    splitScreen: {
-      enabled: false,
-      view: "overview",
-      size: [50, 50]
-    },
-    scale: 1,
-    interactionCloseOnOutsideClick: false,
-    showPanel: true,
-    minimizePanelInteractive: 5e3
-  };
-}
-const devtoolsClientState = useLocalStorage(
-  "__TMAGIC_DEVTOOLS_CLIENT_STATE__",
-  clientStateFactory(),
-  { mergeDefaults: true }
-);
-watch(
-  () => devtoolsClientState.value.splitScreen.enabled,
-  (enabled, o) => {
-    if (o && !enabled) {
-      devtoolsClientState.value.splitScreen.size = [50, 50];
-    }
-  }
-);
-
-/* Injected with object hook! */
-
 const _hoisted_1$7 = { flex: "~ items-center gap-3" };
 const _hoisted_2$5 = {
   key: 0,
@@ -19314,213 +21440,6 @@ const _sfc_main$7 = /* @__PURE__ */ defineComponent({
     };
   }
 });
-
-/* Injected with object hook! */
-
-function getDefaultExportFromCjs (x) {
-	return x && x.__esModule && Object.prototype.hasOwnProperty.call(x, 'default') ? x['default'] : x;
-}
-
-/* Injected with object hook! */
-
-// do not edit .js files directly - edit src/index.jst
-
-
-
-var fastDeepEqual = function equal(a, b) {
-  if (a === b) return true;
-
-  if (a && b && typeof a == 'object' && typeof b == 'object') {
-    if (a.constructor !== b.constructor) return false;
-
-    var length, i, keys;
-    if (Array.isArray(a)) {
-      length = a.length;
-      if (length != b.length) return false;
-      for (i = length; i-- !== 0;)
-        if (!equal(a[i], b[i])) return false;
-      return true;
-    }
-
-
-
-    if (a.constructor === RegExp) return a.source === b.source && a.flags === b.flags;
-    if (a.valueOf !== Object.prototype.valueOf) return a.valueOf() === b.valueOf();
-    if (a.toString !== Object.prototype.toString) return a.toString() === b.toString();
-
-    keys = Object.keys(a);
-    length = keys.length;
-    if (length !== Object.keys(b).length) return false;
-
-    for (i = length; i-- !== 0;)
-      if (!Object.prototype.hasOwnProperty.call(b, keys[i])) return false;
-
-    for (i = length; i-- !== 0;) {
-      var key = keys[i];
-
-      if (!equal(a[key], b[key])) return false;
-    }
-
-    return true;
-  }
-
-  // true if both NaN, false otherwise
-  return a!==a && b!==b;
-};
-
-const equal = /*@__PURE__*/getDefaultExportFromCjs(fastDeepEqual);
-/* Injected with object hook! */
-
-const builtinTab = [
-  [
-    "app",
-    [
-      {
-        icon: "i-carbon-information",
-        name: "overview",
-        order: -100,
-        path: "overview",
-        title: "Overview"
-      },
-      {
-        icon: "i-carbon-assembly-cluster",
-        name: "nodes",
-        order: -100,
-        path: "nodes",
-        title: "Nodes"
-      },
-      {
-        icon: "i-carbon-tree-view-alt",
-        name: "pages",
-        order: -100,
-        path: "pages",
-        title: "Pages"
-      }
-    ]
-  ]
-];
-function getBuiltinTab() {
-  const tab = deepClone(builtinTab);
-  return tab;
-}
-const CUSTOM_TAB_VIEW = "custom-tab-view";
-const CUSTOM_INSPECTOR_TAB_VIEW = "custom-inspector-tab-view";
-
-/* Injected with object hook! */
-
-function useAllTabs() {
-  const state = useDevToolsState();
-  let cachedCustomTabs = [];
-  const customTabs = computed(() => {
-    if (equal(state.tabs.value, cachedCustomTabs))
-      return cachedCustomTabs;
-    cachedCustomTabs = state.tabs.value;
-    return state.tabs.value;
-  });
-  const allTabs = computed(() => {
-    const vitePluginDetected = state.vitePluginDetected.value;
-    const tabs = [...getBuiltinTab()];
-    customTabs.value.forEach((tab) => {
-      const currentTab = tabs.find(
-        (t) => t[0] === tab.category
-      );
-      if (currentTab) {
-        if (currentTab[1].some((t) => t.name === tab.name)) return;
-        if (!vitePluginDetected || isInElectron || isInChromePanel) return;
-        currentTab[1].push({
-          ...tab
-        });
-      }
-    });
-    return [...tabs];
-  });
-  const flattenedTabs = computed(
-    () => allTabs.value.reduce((prev, [_, tabs]) => {
-      tabs.forEach((tab) => {
-        prev.push(tab);
-      });
-      return prev;
-    }, [])
-  );
-  const categorizedTabs = computed(() => {
-    const { hiddenTabCategories, hiddenTabs, pinnedTabs } = devtoolsClientState.value.tabSettings;
-    const pinnedHidden = hiddenTabCategories.includes("pinned");
-    const tabs = allTabs.value.reduce(
-      (prev, [category, tabs2]) => {
-        const data = [{ hidden: false, name: category }, []];
-        const categoryHidden = hiddenTabCategories.includes(category);
-        tabs2.forEach((tab) => {
-          const tabHidden = hiddenTabs.includes(tab.name);
-          if (pinnedTabs.includes(tab.name)) {
-            prev[0][1].push({
-              ...tab,
-              hidden: tabHidden || pinnedHidden
-            });
-          } else {
-            const hidden = tabHidden || categoryHidden;
-            data[1].push({ ...tab, hidden });
-          }
-        });
-        data[0].hidden = data[1].every((t) => t.hidden);
-        prev.push(data);
-        return prev;
-      },
-      [[{ name: "pinned", hidden: false }, []]]
-    );
-    tabs[0][0].hidden = tabs[0][1].every((t) => t.hidden);
-    tabs[0][1].sort((a, b) => pinnedTabs.indexOf(a.name) - pinnedTabs.indexOf(b.name));
-    return tabs;
-  });
-  const enabledTabs = computed(
-    () => categorizedTabs.value.reduce((prev, [meta, tabs]) => {
-      if (meta.hidden) return prev;
-      const filtered = tabs.filter((t) => !t.hidden);
-      if (filtered.length) prev.push([meta, filtered]);
-      return prev;
-    }, [])
-  );
-  const enabledFlattenTabs = computed(
-    () => enabledTabs.value.reduce((prev, [_, tabs]) => {
-      tabs.forEach((tab) => {
-        prev.push(tab);
-      });
-      return prev;
-    }, [])
-  );
-  return { categorizedTabs, flattenedTabs, enabledTabs, enabledFlattenTabs };
-}
-function getCategorizedTabs(flattenTabs, enabledTabs) {
-  return computed(() => {
-    const categories = [];
-    const { pinnedTabs } = devtoolsClientState.value.tabSettings;
-    const tabs = toValue$2(enabledTabs).reduce(
-      (prev, [{ name: cateName, hidden }, tabs2]) => {
-        tabs2.forEach((tab) => {
-          if (toValue$2(flattenTabs).some((i) => i.name === tab.name)) {
-            const category = pinnedTabs.includes(tab.name) ? "pinned" : cateName || "app";
-            prev.push({
-              tab,
-              category: {
-                name: category,
-                hidden
-              }
-            });
-          }
-        });
-        return prev;
-      },
-      []
-    );
-    tabs.forEach(({ tab, category }) => {
-      const cates = categories.find(([{ name }]) => name === category.name);
-      if (!cates) categories.push([category, [tab]]);
-      else cates[1].push(tab);
-    });
-    const pinned = categories.find(([{ name }]) => name === "pinned");
-    if (pinned) pinned[1].sort((a, b) => pinnedTabs.indexOf(a.name) - pinnedTabs.indexOf(b.name));
-    return categories;
-  });
-}
 
 /* Injected with object hook! */
 
@@ -20517,7 +22436,8 @@ const Pages = /*#__PURE__*/_export_sfc(_sfc_main, [['render',_sfc_render]]);
 const routes = [
   { path: "/", component: _sfc_main$2 },
   { path: "/overview", component: _sfc_main$1 },
-  { path: "/pages", component: Pages }
+  { path: "/pages", component: Pages },
+  { path: "/settings", component: _sfc_main$a }
 ];
 const router = createRouter({
   history: createMemoryHistory(),
